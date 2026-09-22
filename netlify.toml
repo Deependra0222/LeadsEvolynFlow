@@ -1,0 +1,13 @@
+[build]
+  publish = "."
+  functions = "netlify/functions"
+
+[[redirects]]
+  from = "/api/leads"
+  to = "/.netlify/functions/lead-data"
+  status = 200
+
+[[redirects]]
+  from = "/api/leads/*"
+  to = "/.netlify/functions/lead-data/:splat"
+  status = 200

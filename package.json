@@ -1,0 +1,11 @@
+{
+  "name": "telecaller-netlify",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test"
+  },
+  "dependencies": {
+    "@netlify/blobs": "11.1.0"
+  }
+}
