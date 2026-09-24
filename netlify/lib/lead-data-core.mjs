@@ -1,145 +1,230 @@
-export const STATUS_OPTIONS = [
-  "Not Called",
-  "Called",
-  "No Answer",
-  "Follow-up",
-  "Interested",
-  "Not Interested"
-];
-
-export const MAX_LEAD_ID = 722;
-export const MAX_REMARKS_LENGTH = 5000;
-
-export function validateLeadId(value) {
-  if (typeof value !== "string" || !/^[1-9]\d*$/.test(value)) {
-    return null;
-  }
-  const id = Number(value);
-  return Number.isInteger(id) && id >= 1 && id <= MAX_LEAD_ID ? id : null;
-}
-
-function isValidLocalDateTime(value) {
-  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/.exec(value);
-  if (!match) return false;
-
-  const [, yearText, monthText, dayText, hourText, minuteText] = match;
-  const year = Number(yearText);
-  const month = Number(monthText);
-  const day = Number(dayText);
-  const hour = Number(hourText);
-  const minute = Number(minuteText);
-  const leapYear = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
-  const daysPerMonth = [31, leapYear ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-
-  return year >= 1 &&
-    month >= 1 && month <= 12 &&
-    day >= 1 && day <= daysPerMonth[month - 1] &&
-    hour >= 0 && hour <= 23 &&
-    minute >= 0 && minute <= 59;
-}
-
-export function validatePayload(value) {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return { ok: false, error: "Request body must be an object." };
-  }
-
-  const { status, followup, remarks } = value;
-
-  if (!STATUS_OPTIONS.includes(status)) {
-    return { ok: false, error: "Invalid call status." };
-  }
-
-  const validFollowup = typeof followup === "string" && (
-    followup === "" || isValidLocalDateTime(followup)
-  );
-  if (!validFollowup) {
-    return { ok: false, error: "Invalid follow-up date." };
-  }
-
-  if (typeof remarks !== "string" || remarks.length > MAX_REMARKS_LENGTH) {
-    return { ok: false, error: "Remarks must be 5,000 characters or fewer." };
-  }
-
-  return { ok: true, data: { status, followup, remarks } };
-}
+import {
+  LIMITS,
+  validateCorePatch,
+  validateImportRecords,
+  validateLeadIdentifier,
+  validateWorkflowPatch
+} from "./lead-model.mjs";
 
 function json(body, status = 200, extraHeaders = {}) {
   return Response.json(body, {
     status,
-    headers: {
-      "cache-control": "no-store",
-      ...extraHeaders
-    }
+    headers: { "cache-control": "no-store", ...extraHeaders }
   });
 }
 
-function isLeadPath(pathname) {
-  return pathname === "/api/leads" ||
-    pathname.endsWith("/lead-data") ||
-    pathname.includes("/api/leads/") ||
-    pathname.includes("/lead-data/");
+function apiPath(pathname) {
+  if (pathname.startsWith("/api/")) return pathname;
+  const prefix = "/.netlify/functions/lead-data";
+  if (!pathname.startsWith(prefix)) return pathname;
+  const suffix = pathname.slice(prefix.length);
+  if (!suffix) return "/api/leads";
+  if (suffix === "/admin" || suffix.startsWith("/admin/")) return `/api${suffix}`;
+  return `/api/leads${suffix}`;
+}
+
+function sameOrigin(request) {
+  const origin = request.headers.get("origin");
+  return !origin || origin === new URL(request.url).origin;
+}
+
+async function readJson(request) {
+  const contentType = request.headers.get("content-type") || "";
+  if (!/^application\/json(?:\s*;|$)/i.test(contentType)) {
+    return { ok: false, response: json({ error: "Content-Type must be application/json." }, 415) };
+  }
+  const declared = Number(request.headers.get("content-length") || 0);
+  if (Number.isFinite(declared) && declared > LIMITS.importBytes) {
+    return { ok: false, response: json({ error: "Request body is too large." }, 413) };
+  }
+  const text = await request.text();
+  if (new TextEncoder().encode(text).byteLength > LIMITS.importBytes) {
+    return { ok: false, response: json({ error: "Request body is too large." }, 413) };
+  }
+  try {
+    return { ok: true, value: JSON.parse(text) };
+  } catch {
+    return { ok: false, response: json({ error: "Request body must be valid JSON." }, 400) };
+  }
+}
+
+function clientKey(request) {
+  return request.headers.get("x-nf-client-connection-ip") ||
+    (request.headers.get("x-forwarded-for") || "").split(",")[0].trim() ||
+    "unknown";
+}
+
+function requireAdmin(request, auth) {
+  return auth.isAuthorized(request) ? null : json({ error: "Admin authentication required." }, 401);
+}
+
+function methodNotAllowed(allow) {
+  return json({ error: "Method not allowed." }, 405, { allow: allow.join(", ") });
 }
 
 export function createLeadHandler({
-  listRecords,
-  saveRecord,
+  repository,
+  auth,
+  loginLimiter,
   now = () => new Date().toISOString()
 }) {
   return async function handle(request) {
-    const { pathname } = new URL(request.url);
-    const isCollection = pathname === "/api/leads" || pathname.endsWith("/lead-data");
-    const rawId = pathname.split("/").filter(Boolean).at(-1);
+    const url = new URL(request.url);
+    const path = apiPath(url.pathname);
 
     if (request.method === "OPTIONS") {
       return new Response(null, {
         status: 204,
-        headers: {
-          "access-control-allow-methods": "GET, PUT, OPTIONS"
-        }
+        headers: { "access-control-allow-methods": "GET, PATCH, POST, PUT, DELETE, OPTIONS" }
       });
+    }
+    if (!["GET", "OPTIONS"].includes(request.method) && !sameOrigin(request)) {
+      return json({ error: "Cross-origin requests are not allowed." }, 403);
     }
 
     try {
-      if (request.method === "GET" && isCollection) {
-        return json({ records: await listRecords() });
+      if (path === "/api/leads") {
+        if (request.method !== "GET") return methodNotAllowed(["GET", "OPTIONS"]);
+        await repository.ensureInitialized();
+        return json({ leads: await repository.list() });
       }
 
-      if (request.method === "PUT") {
-        const id = validateLeadId(rawId);
-        if (id === null) {
-          return json({ error: "Invalid lead ID." }, 400);
-        }
-
-        let body;
-        try {
-          body = await request.json();
-        } catch {
-          return json({ error: "Request body must be valid JSON." }, 400);
-        }
-
-        const result = validatePayload(body);
-        if (!result.ok) {
-          return json({ error: result.error }, 400);
-        }
-
-        const record = {
-          ...result.data,
-          updatedAt: now()
-        };
-        await saveRecord(id, record);
-        return json({ record });
+      if (path === "/api/admin/session") {
+        if (request.method !== "GET") return methodNotAllowed(["GET", "OPTIONS"]);
+        return json({ authenticated: auth.isAuthorized(request) });
       }
 
-      if (isLeadPath(pathname)) {
-        return json(
-          { error: "Method not allowed." },
-          405,
-          { allow: "GET, PUT, OPTIONS" }
+      if (path === "/api/admin/login") {
+        if (request.method !== "POST") return methodNotAllowed(["POST", "OPTIONS"]);
+        if (!auth.configured) return json({ error: "Admin login is temporarily unavailable." }, 503);
+        const limit = loginLimiter.check(clientKey(request));
+        if (!limit.allowed) {
+          return json({ error: "Too many login attempts. Please try again later." }, 429, {
+            "retry-after": String(limit.retryAfterSeconds)
+          });
+        }
+        const parsed = await readJson(request);
+        if (!parsed.ok) return parsed.response;
+        if (!parsed.value || typeof parsed.value !== "object" || typeof parsed.value.password !== "string" || !auth.authenticate(parsed.value.password)) {
+          return json({ error: "Invalid admin credentials." }, 401);
+        }
+        return json({ authenticated: true }, 200, {
+          "set-cookie": auth.issueCookie({ secure: url.protocol === "https:" })
+        });
+      }
+
+      if (path === "/api/admin/logout") {
+        if (request.method !== "POST") return methodNotAllowed(["POST", "OPTIONS"]);
+        return json({ authenticated: false }, 200, {
+          "set-cookie": auth.clearCookie({ secure: url.protocol === "https:" })
+        });
+      }
+
+      if (path === "/api/admin/export") {
+        if (request.method !== "GET") return methodNotAllowed(["GET", "OPTIONS"]);
+        const unauthorized = requireAdmin(request, auth);
+        if (unauthorized) return unauthorized;
+        await repository.ensureInitialized();
+        const contents = JSON.stringify(await repository.exportAll(), null, 2);
+        return new Response(contents, {
+          status: 200,
+          headers: {
+            "content-type": "application/json; charset=utf-8",
+            "cache-control": "no-store",
+            "content-disposition": `attachment; filename="telecaller-leads-${now().slice(0, 10)}.json"`
+          }
+        });
+      }
+
+      if (path === "/api/leads/import") {
+        if (request.method !== "POST") return methodNotAllowed(["POST", "OPTIONS"]);
+        const unauthorized = requireAdmin(request, auth);
+        if (unauthorized) return unauthorized;
+        const parsed = await readJson(request);
+        if (!parsed.ok) return parsed.response;
+        if (!parsed.value || typeof parsed.value !== "object" || typeof parsed.value.preview !== "boolean" || !("records" in parsed.value)) {
+          return json({ error: "Import body must contain preview and records." }, 400);
+        }
+        if (!parsed.value.preview && (typeof parsed.value.requestId !== "string" || !/^[A-Za-z0-9_-]{8,60}$/.test(parsed.value.requestId))) {
+          return json({ error: "Confirmed imports require a valid request ID." }, 400);
+        }
+        await repository.ensureInitialized();
+        const existing = await repository.list();
+        const submittedRecords = Array.isArray(parsed.value.records) ? parsed.value.records : [parsed.value.records];
+        const replayIds = parsed.value.preview ? new Set() : new Set(
+          submittedRecords.map((_, index) => `import-${parsed.value.requestId}-${index}`)
         );
+        const validated = validateImportRecords(parsed.value.records, {
+          existingSnos: new Set(existing.filter(lead => !replayIds.has(lead.id)).map(lead => lead.sno))
+        });
+        const reserved = new Set(existing.map(lead => lead.sno));
+        for (const record of validated.valid) if (record.sno !== undefined) reserved.add(record.sno);
+        let nextSno = 1;
+        const proposedRows = validated.validRows.map(({ index, data: record }) => {
+          if (record.sno !== undefined) return { index, record };
+          while (reserved.has(nextSno)) nextSno += 1;
+          reserved.add(nextSno);
+          return { index, record: { ...record, sno: nextSno } };
+        });
+        if (parsed.value.preview) {
+          return json({
+            valid: proposedRows.map(({ index, record }) => ({ index, ...record })),
+            errors: validated.errors
+          });
+        }
+        const result = validated.valid.length
+          ? await repository.importMany(validated.valid, {
+              requestId: parsed.value.requestId,
+              sourceIndexes: validated.validRows.map(row => row.index)
+            })
+          : { imported: [], errors: [] };
+        const storageErrors = result.errors.map(error => ({
+          ...error,
+          index: proposedRows[error.index]?.index ?? error.index
+        }));
+        return json({ imported: result.imported, errors: [...validated.errors, ...storageErrors] });
       }
 
+      const workflowMatch = /^\/api\/leads\/([^/]+)\/workflow$/.exec(path);
+      if (workflowMatch) {
+        if (request.method !== "PATCH") return methodNotAllowed(["PATCH", "OPTIONS"]);
+        const id = validateLeadIdentifier(decodeURIComponent(workflowMatch[1]));
+        if (!id) return json({ error: "Invalid lead ID." }, 400);
+        const parsed = await readJson(request);
+        if (!parsed.ok) return parsed.response;
+        const validated = validateWorkflowPatch(parsed.value);
+        if (!validated.ok) return json({ error: validated.error }, validated.status);
+        await repository.ensureInitialized();
+        const record = await repository.patchWorkflow(id, validated.data);
+        return record ? json({ lead: record }) : json({ error: "Lead not found." }, 404);
+      }
+
+      const leadMatch = /^\/api\/leads\/([^/]+)$/.exec(path);
+      if (leadMatch) {
+        const id = validateLeadIdentifier(decodeURIComponent(leadMatch[1]));
+        if (!id) return json({ error: "Invalid lead ID." }, 400);
+        const unauthorized = requireAdmin(request, auth);
+        if (unauthorized) return unauthorized;
+        await repository.ensureInitialized();
+        if (request.method === "PUT") {
+          const parsed = await readJson(request);
+          if (!parsed.ok) return parsed.response;
+          const validated = validateCorePatch(parsed.value);
+          if (!validated.ok) return json({ error: validated.error }, 400);
+          const record = await repository.updateCore(id, validated.data);
+          return record ? json({ lead: record }) : json({ error: "Lead not found." }, 404);
+        }
+        if (request.method === "DELETE") {
+          const removed = await repository.remove(id);
+          return removed ? json({ deleted: true, id }) : json({ error: "Lead not found." }, 404);
+        }
+        return methodNotAllowed(["PUT", "DELETE", "OPTIONS"]);
+      }
+
+      if (path.startsWith("/api/leads") || path.startsWith("/api/admin")) return json({ error: "Not found." }, 404);
       return json({ error: "Not found." }, 404);
-    } catch {
+    } catch (error) {
+      if (error?.code === "CONFLICT") return json({ error: error.message }, 409);
       return json({ error: "Shared storage is temporarily unavailable." }, 500);
     }
   };

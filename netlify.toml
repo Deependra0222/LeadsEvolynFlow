@@ -2,6 +2,14 @@
   publish = "."
   functions = "netlify/functions"
 
+[functions]
+  included_files = ["netlify/data/initial-leads.json"]
+
+[[redirects]]
+  from = "/api/admin/*"
+  to = "/.netlify/functions/lead-data/admin/:splat"
+  status = 200
+
 [[redirects]]
   from = "/api/leads"
   to = "/.netlify/functions/lead-data"

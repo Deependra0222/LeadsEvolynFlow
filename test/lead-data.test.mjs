@@ -1,200 +1,285 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFile, readdir } from "node:fs/promises";
+import { createLeadHandler } from "../netlify/lib/lead-data-core.mjs";
 
-async function loadCore() {
-  try {
-    return await import("../netlify/lib/lead-data-core.mjs");
-  } catch (error) {
-    assert.fail(`Expected the lead API module to load: ${error.code || error.message}`);
-  }
-}
+const NOW = "2026-09-24T06:00:00.000Z";
+const lead = (overrides = {}) => ({
+  id: "lead-a", sno: 1, name: "A", mobile: "01", address: "Agra", category: "Store",
+  status: "Called", followup: "", remarks: "old", createdAt: NOW, updatedAt: NOW, ...overrides
+});
 
-async function makeHandler(overrides = {}) {
-  const { createLeadHandler } = await loadCore();
-  const saved = [];
-  const handler = createLeadHandler({
-    listRecords: async () => ({
-      "12": {
-        status: "Called",
-        followup: "2026-09-23T10:30",
-        remarks: "Existing note",
-        updatedAt: "2026-09-23T00:00:00.000Z"
-      }
-    }),
-    saveRecord: async (id, record) => saved.push({ id, record }),
-    now: () => "2026-09-23T01:02:03.000Z",
+function makeRepository(overrides = {}) {
+  const records = new Map([["lead-a", lead()]]);
+  const calls = { ensure: 0, patch: [], imports: [], importOptions: [], update: [], remove: [], export: 0 };
+  return {
+    calls,
+    async ensureInitialized() { calls.ensure += 1; },
+    async list() { return [...records.values()]; },
+    async get(id) { return records.get(id) || null; },
+    async patchWorkflow(id, patch) {
+      calls.patch.push({ id, patch });
+      const current = records.get(id);
+      if (!current) return null;
+      const next = { ...current, ...patch, updatedAt: NOW };
+      records.set(id, next);
+      return next;
+    },
+    async importMany(items, options) {
+      calls.imports.push(items);
+      calls.importOptions.push(options);
+      return {
+        imported: items.map((item, index) => lead({ ...item, id: `new-${index}`, sno: item.sno ?? index + 2 })),
+        errors: []
+      };
+    },
+    async updateCore(id, core) {
+      calls.update.push({ id, core });
+      const current = records.get(id);
+      if (!current) return null;
+      const next = { ...current, ...core, updatedAt: NOW };
+      records.set(id, next);
+      return next;
+    },
+    async remove(id) { calls.remove.push(id); const current = records.get(id) || null; records.delete(id); return current; },
+    async exportAll() { calls.export += 1; return [...records.values()]; },
     ...overrides
-  });
-  return { handler, saved };
+  };
 }
 
-const validBody = {
-  status: "Called",
-  followup: "2026-09-23T10:30",
-  remarks: "Spoke to the owner"
-};
+function makeAuth(overrides = {}) {
+  return {
+    configured: true,
+    authenticate: attempt => attempt === "correct",
+    issueCookie: ({ secure }) => `lead_admin_session=ok; Path=/; HttpOnly; SameSite=Strict; Max-Age=86400${secure ? "; Secure" : ""}`,
+    clearCookie: () => "lead_admin_session=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0; Secure",
+    isAuthorized: request => (request.headers.get("cookie") || "").includes("lead_admin_session=ok"),
+    ...overrides
+  };
+}
 
-test("GET returns all shared lead records without caching", async () => {
-  const { handler } = await makeHandler();
-  const response = await handler(new Request("https://site.test/api/leads"));
+function makeHandler({ repository = makeRepository(), auth = makeAuth(), limiter } = {}) {
+  const loginLimiter = limiter || { check: () => ({ allowed: true, retryAfterSeconds: 0 }) };
+  return { handler: createLeadHandler({ repository, auth, loginLimiter, now: () => NOW }), repository };
+}
 
+function request(path, method = "GET", body, options = {}) {
+  const headers = new Headers(options.headers || {});
+  if (body !== undefined && !headers.has("content-type")) headers.set("content-type", "application/json");
+  if (options.origin !== false && method !== "GET") headers.set("origin", options.origin || "https://site.test");
+  if (options.cookie) headers.set("cookie", options.cookie);
+  return new Request(`https://site.test${path}`, {
+    method,
+    headers,
+    body: body === undefined ? undefined : typeof body === "string" ? body : JSON.stringify(body)
+  });
+}
+
+test("GET initializes and returns complete leads without caching", async () => {
+  const { handler, repository } = makeHandler();
+  const response = await handler(request("/api/leads"));
   assert.equal(response.status, 200);
   assert.equal(response.headers.get("cache-control"), "no-store");
-  assert.deepEqual(await response.json(), {
-    records: {
-      "12": {
-        status: "Called",
-        followup: "2026-09-23T10:30",
-        remarks: "Existing note",
-        updatedAt: "2026-09-23T00:00:00.000Z"
-      }
+  assert.deepEqual(await response.json(), { leads: [lead()] });
+  assert.equal(repository.calls.ensure, 1);
+});
+
+test("PATCH sends only changed workflow fields", async () => {
+  const { handler, repository } = makeHandler();
+  const response = await handler(request("/api/leads/lead-a/workflow", "PATCH", { remarks: "new" }));
+  assert.equal(response.status, 200);
+  assert.equal((await response.json()).lead.remarks, "new");
+  assert.deepEqual(repository.calls.patch, [{ id: "lead-a", patch: { remarks: "new" } }]);
+});
+
+test("public core-field changes are forbidden", async () => {
+  const { handler, repository } = makeHandler();
+  const response = await handler(request("/api/leads/lead-a/workflow", "PATCH", { name: "Hijack" }));
+  assert.equal(response.status, 403);
+  assert.deepEqual(repository.calls.patch, []);
+});
+
+test("public workflow route validates identifiers, JSON, type, body size, and missing leads", async (t) => {
+  const cases = [
+    ["bad id", request("/api/leads/..%2Fsecret/workflow", "PATCH", { remarks: "x" }), 400],
+    ["malformed JSON", request("/api/leads/lead-a/workflow", "PATCH", "{bad"), 400],
+    ["wrong type", request("/api/leads/lead-a/workflow", "PATCH", "x", { headers: { "content-type": "text/plain" } }), 415],
+    ["oversized header", request("/api/leads/lead-a/workflow", "PATCH", { remarks: "x" }, { headers: { "content-length": "2000001" } }), 413],
+    ["missing lead", request("/api/leads/missing/workflow", "PATCH", { remarks: "x" }), 404]
+  ];
+  for (const [name, input, status] of cases) await t.test(name, async () => assert.equal((await makeHandler().handler(input)).status, status));
+});
+
+test("foreign origins are rejected for mutations", async () => {
+  const { handler } = makeHandler();
+  assert.equal((await handler(request("/api/leads/lead-a/workflow", "PATCH", { remarks: "x" }, { origin: "https://evil.test" }))).status, 403);
+});
+
+test("admin login, session, and logout manage the signed cookie", async () => {
+  const { handler } = makeHandler();
+  const login = await handler(request("/api/admin/login", "POST", { password: "correct" }));
+  assert.equal(login.status, 200);
+  assert.match(login.headers.get("set-cookie"), /lead_admin_session=ok/);
+  assert.deepEqual(await login.json(), { authenticated: true });
+  assert.deepEqual(await (await handler(request("/api/admin/session", "GET", undefined, { cookie: "lead_admin_session=ok" }))).json(), { authenticated: true });
+  const logout = await handler(request("/api/admin/logout", "POST", {}, { cookie: "lead_admin_session=ok" }));
+  assert.match(logout.headers.get("set-cookie"), /Max-Age=0/);
+});
+
+test("bad login is generic, missing configuration is unavailable, and throttling returns retry time", async () => {
+  const bad = await makeHandler().handler(request("/api/admin/login", "POST", { password: "wrong" }));
+  assert.equal(bad.status, 401);
+  assert.deepEqual(await bad.json(), { error: "Invalid admin credentials." });
+  const unconfigured = makeHandler({ auth: makeAuth({ configured: false }) });
+  assert.equal((await unconfigured.handler(request("/api/admin/login", "POST", { password: "x" }))).status, 503);
+  const limited = makeHandler({ limiter: { check: () => ({ allowed: false, retryAfterSeconds: 123 }) } });
+  const response = await limited.handler(request("/api/admin/login", "POST", { password: "x" }));
+  assert.equal(response.status, 429);
+  assert.equal(response.headers.get("retry-after"), "123");
+});
+
+test("privileged routes reject missing and tampered sessions without writes", async (t) => {
+  for (const cookie of [undefined, "lead_admin_session=tampered"]) {
+    await t.test(cookie || "missing", async () => {
+      const { handler, repository } = makeHandler();
+      const response = await handler(request("/api/leads/lead-a", "DELETE", undefined, { cookie }));
+      assert.equal(response.status, 401);
+      assert.deepEqual(repository.calls.remove, []);
+    });
+  }
+});
+
+test("admin import preview reports valid rows and errors without writing", async () => {
+  const { handler, repository } = makeHandler();
+  const response = await handler(request("/api/leads/import", "POST", {
+    preview: true,
+    records: [{ name: "Good", mobile: "2" }, { name: "", mobile: "3" }]
+  }, { cookie: "lead_admin_session=ok" }));
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.equal(body.valid.length, 1);
+  assert.equal(body.valid[0].index, 0);
+  assert.equal(body.valid[0].sno, 2);
+  assert.equal(body.errors[0].index, 1);
+  assert.deepEqual(repository.calls.imports, []);
+});
+
+test("admin import writes only validated records", async () => {
+  const { handler, repository } = makeHandler();
+  const response = await handler(request("/api/leads/import", "POST", {
+    preview: false,
+    requestId: "request_123",
+    records: [{ name: "Good", mobile: "2" }, { name: "", mobile: "3" }]
+  }, { cookie: "lead_admin_session=ok" }));
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.equal(body.imported.length, 1);
+  assert.equal(body.errors.length, 1);
+  assert.equal(repository.calls.imports[0].length, 1);
+  assert.equal(repository.calls.imports[0][0].sno, undefined);
+  assert.deepEqual(repository.calls.importOptions[0], { requestId: "request_123", sourceIndexes: [0] });
+});
+
+test("admin import rejects unsafe request identifiers", async () => {
+  const { handler, repository } = makeHandler();
+  const response = await handler(request("/api/leads/import", "POST", {
+    preview: false,
+    requestId: "../unsafe",
+    records: [{ name: "Good", mobile: "2" }]
+  }, { cookie: "lead_admin_session=ok" }));
+  assert.equal(response.status, 400);
+  assert.deepEqual(repository.calls.imports, []);
+});
+
+test("confirmed import retries can replay their previously stored explicit serial", async () => {
+  const prior = lead({
+    id: "import-request_123-0",
+    sno: 9,
+    name: "Previously stored",
+    mobile: "9",
+    address: "",
+    category: ""
+  });
+  const repository = makeRepository({
+    async list() { return [prior]; },
+    async importMany() { return { imported: [prior], errors: [] }; }
+  });
+  const { handler } = makeHandler({ repository });
+  const response = await handler(request("/api/leads/import", "POST", {
+    preview: false,
+    requestId: "request_123",
+    records: [{ sno: 9, name: "Previously stored", mobile: "9", address: "", category: "" }]
+  }, { cookie: "lead_admin_session=ok" }));
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), { imported: [prior], errors: [] });
+});
+
+test("admin import returns stored rows and maps storage failures to original input rows", async () => {
+  const repository = makeRepository({
+    async importMany(items) {
+      return {
+        imported: [lead({ ...items[0], id: "new-0" })],
+        errors: [{ index: 1, field: "sno", error: "Could not store this lead." }]
+      };
     }
   });
-});
-
-test("PUT validates and saves one lead", async () => {
-  const { handler, saved } = await makeHandler();
-  const response = await handler(new Request("https://site.test/api/leads/12", {
-    method: "PUT",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(validBody)
-  }));
-
-  assert.equal(response.status, 200);
-  const expectedRecord = { ...validBody, updatedAt: "2026-09-23T01:02:03.000Z" };
-  assert.deepEqual(await response.json(), { record: expectedRecord });
-  assert.deepEqual(saved, [{ id: 12, record: expectedRecord }]);
-});
-
-test("PUT accepts the Netlify wildcard redirect path", async () => {
-  const { handler, saved } = await makeHandler();
-  const response = await handler(new Request("https://site.test/.netlify/functions/lead-data/12", {
-    method: "PUT",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(validBody)
-  }));
+  const { handler } = makeHandler({ repository });
+  const response = await handler(request("/api/leads/import", "POST", {
+    preview: false,
+    requestId: "request_partial_123",
+    records: [
+      { name: "", mobile: "bad" },
+      { name: "Stored", mobile: "2" },
+      { name: "Failed", mobile: "3" }
+    ]
+  }, { cookie: "lead_admin_session=ok" }));
 
   assert.equal(response.status, 200);
-  assert.equal(saved[0].id, 12);
+  const body = await response.json();
+  assert.deepEqual(body.imported.map(record => record.name), ["Stored"]);
+  assert.deepEqual(body.errors.map(error => error.index), [0, 2]);
 });
 
-test("PUT rejects malformed and out-of-range lead IDs", async (t) => {
-  for (const id of ["0", "723", "abc", "0x10", "1e2", "1.0", "%2012"]) {
-    await t.test(id, async () => {
-      const { handler, saved } = await makeHandler();
-      const response = await handler(new Request(`https://site.test/api/leads/${id}`, {
-        method: "PUT",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(validBody)
-      }));
-
-      assert.equal(response.status, 400);
-      assert.deepEqual(saved, []);
-    });
-  }
+test("admin can edit core details and delete a lead", async () => {
+  const { handler, repository } = makeHandler();
+  const edit = await handler(request("/api/leads/lead-a", "PUT", {
+    name: "Updated", mobile: "02", address: "Lucknow", category: "Retail"
+  }, { cookie: "lead_admin_session=ok" }));
+  assert.equal(edit.status, 200);
+  assert.equal((await edit.json()).lead.name, "Updated");
+  const deletion = await handler(request("/api/leads/lead-a", "DELETE", undefined, { cookie: "lead_admin_session=ok" }));
+  assert.equal(deletion.status, 200);
+  assert.deepEqual(await deletion.json(), { deleted: true, id: "lead-a" });
+  assert.deepEqual(repository.calls.remove, ["lead-a"]);
 });
 
-test("PUT rejects invalid status, follow-up, and oversized remarks", async (t) => {
-  const invalidBodies = [
-    { ...validBody, status: "Unknown" },
-    { ...validBody, followup: "tomorrow" },
-    { ...validBody, followup: "2026-02-30T10:30" },
-    { ...validBody, followup: "2026-01-01T24:00" },
-    { ...validBody, followup: "2025-02-29T10:30" },
-    { ...validBody, remarks: "x".repeat(5001) }
-  ];
-
-  for (const body of invalidBodies) {
-    await t.test(JSON.stringify(body).slice(0, 60), async () => {
-      const { handler, saved } = await makeHandler();
-      const response = await handler(new Request("https://site.test/api/leads/12", {
-        method: "PUT",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(body)
-      }));
-
-      assert.equal(response.status, 400);
-      assert.deepEqual(saved, []);
-    });
-  }
-});
-
-test("PUT accepts a valid leap-day follow-up", async () => {
-  const { handler, saved } = await makeHandler();
-  const leapDayBody = { ...validBody, followup: "2028-02-29T23:59" };
-  const response = await handler(new Request("https://site.test/api/leads/12", {
-    method: "PUT",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(leapDayBody)
-  }));
-
+test("admin export downloads complete JSON", async () => {
+  const { handler } = makeHandler();
+  const response = await handler(request("/api/admin/export", "GET", undefined, { cookie: "lead_admin_session=ok" }));
   assert.equal(response.status, 200);
-  assert.equal(saved[0].record.followup, "2028-02-29T23:59");
+  assert.match(response.headers.get("content-disposition"), /attachment; filename="telecaller-leads-2026-09-24.json"/);
+  assert.equal((await response.json()).length, 1);
 });
 
-test("PUT rejects malformed JSON", async () => {
-  const { handler, saved } = await makeHandler();
-  const response = await handler(new Request("https://site.test/api/leads/12", {
-    method: "PUT",
-    headers: { "content-type": "application/json" },
-    body: "{not-json"
-  }));
-
-  assert.equal(response.status, 400);
-  assert.deepEqual(saved, []);
-});
-
-test("unsupported methods return 405 and an Allow header", async () => {
-  const { handler } = await makeHandler();
-  const response = await handler(new Request("https://site.test/api/leads", { method: "POST" }));
-
-  assert.equal(response.status, 405);
-  assert.equal(response.headers.get("allow"), "GET, PUT, OPTIONS");
-});
-
-test("OPTIONS returns a successful empty preflight response", async () => {
-  const { handler } = await makeHandler();
-  const response = await handler(new Request("https://site.test/api/leads", { method: "OPTIONS" }));
-
-  assert.equal(response.status, 204);
-  assert.equal(response.headers.get("access-control-allow-methods"), "GET, PUT, OPTIONS");
-  assert.equal(await response.text(), "");
-});
-
-test("storage failures return a generic 500 response", async () => {
-  const { handler } = await makeHandler({
-    listRecords: async () => { throw new Error("secret storage detail"); }
-  });
-  const response = await handler(new Request("https://site.test/api/leads"));
-
+test("unsupported methods, OPTIONS, and storage failures are safe", async () => {
+  const { handler } = makeHandler();
+  const method = await handler(request("/api/leads", "POST", {}));
+  assert.equal(method.status, 405);
+  assert.match(method.headers.get("allow"), /GET/);
+  assert.equal((await handler(request("/api/leads", "OPTIONS", undefined, { origin: false }))).status, 204);
+  const broken = makeHandler({ repository: makeRepository({ list: async () => { throw new Error("secret detail"); } }) });
+  const response = await broken.handler(request("/api/leads"));
   assert.equal(response.status, 500);
-  assert.deepEqual(await response.json(), {
-    error: "Shared storage is temporarily unavailable."
-  });
+  assert.deepEqual(await response.json(), { error: "Shared storage is temporarily unavailable." });
 });
 
-test("Blob adapter requests strong consistency", async () => {
-  const { readFile } = await import("node:fs/promises");
-  const adapter = await readFile(
-    new URL("../netlify/functions/lead-data.mjs", import.meta.url),
-    "utf8"
-  );
-
-  assert.match(
-    adapter,
-    /getStore\(\{\s*name:\s*"telecaller-leads",\s*consistency:\s*"strong"\s*\}\)/
-  );
-});
-
-test("only the deployable handler is a top-level Netlify function", async () => {
-  const { readdir } = await import("node:fs/promises");
-  const functionFiles = (await readdir(
-    new URL("../netlify/functions/", import.meta.url),
-    { withFileTypes: true }
-  ))
-    .filter(entry => entry.isFile() && entry.name.endsWith(".mjs"))
-    .map(entry => entry.name)
-    .sort();
-
+test("deployable adapter uses strong Blob consistency and one function", async () => {
+  const adapter = await readFile(new URL("../netlify/functions/lead-data.mjs", import.meta.url), "utf8");
+  assert.match(adapter, /getStore\(\{\s*name:\s*"telecaller-leads",\s*consistency:\s*"strong"\s*\}\)/);
+  assert.match(adapter, /LEAD_ADMIN_PASSWORD/);
+  assert.match(adapter, /LEAD_SESSION_SECRET/);
+  const functionFiles = (await readdir(new URL("../netlify/functions/", import.meta.url), { withFileTypes: true }))
+    .filter(entry => entry.isFile() && entry.name.endsWith(".mjs")).map(entry => entry.name);
   assert.deepEqual(functionFiles, ["lead-data.mjs"]);
 });
