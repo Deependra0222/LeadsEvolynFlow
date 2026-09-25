@@ -4,9 +4,9 @@ import { createLeadRepository } from "../netlify/lib/lead-repository.mjs";
 
 const NOW = "2026-09-24T05:00:00.000Z";
 const baseLead = (overrides = {}) => ({
-  id: "a", sno: 1, name: "A", mobile: "1", address: "", category: "",
+  id: "a", sno: 1, name: "A", mobile: "1", address: "", city: "Unknown", category: "",
   status: "Called", followup: "", remarks: "old",
-  createdAt: NOW, updatedAt: NOW, ...overrides
+  compartmentId: "existing-leads", createdAt: NOW, updatedAt: NOW, ...overrides
 });
 
 function createBlobFake(initial = {}) {
@@ -462,4 +462,69 @@ test("failed seed initialization leaves no marker and a retry completes missing 
 
   assert.deepEqual((await repo.list()).map(lead => lead.sno), [1, 2, 3, 4]);
   assert.notEqual(await store.get("system/initialized-v2"), null);
+});
+
+test("version-3 migration preserves workflow data and assigns derived city and compartment", async () => {
+  const store = createBlobFake({
+    "system/initialized-v2": { version: 2, initializedAt: NOW },
+    "lead/seed-1": {
+      id: "seed-1", sno: 1, name: "Legacy", mobile: "1",
+      address: "12 Main Road, Agra, UP", category: "Store",
+      status: "Interested", followup: "", remarks: "legacy note",
+      createdAt: "2026-09-20T00:00:00.000Z", updatedAt: "2026-09-23T00:00:00.000Z"
+    }
+  });
+  const { repo } = makeRepo({ records: [], store });
+
+  await repo.ensureInitialized({ defaultCompartmentId: "existing-leads" });
+
+  const migrated = await repo.get("seed-1");
+  assert.equal(migrated.compartmentId, "existing-leads");
+  assert.equal(migrated.city, "Agra");
+  assert.equal(migrated.remarks, "legacy note");
+  assert.equal(migrated.updatedAt, "2026-09-23T00:00:00.000Z");
+  assert.notEqual(await store.get("system/initialized-v3"), null);
+});
+
+test("ambiguous legacy address becomes Unknown without changing existing data", async () => {
+  const before = {
+    id: "a", sno: 7, name: "Private", mobile: "7", address: "Private Address", category: "",
+    status: "Called", followup: "", remarks: "keep me",
+    createdAt: "2026-09-20T00:00:00.000Z", updatedAt: "2026-09-23T00:00:00.000Z"
+  };
+  const store = createBlobFake({
+    "system/initialized-v2": { version: 2, initializedAt: NOW },
+    "lead/a": before
+  });
+  const { repo } = makeRepo({ records: [], store });
+
+  await repo.ensureInitialized({ defaultCompartmentId: "existing-leads" });
+
+  const after = await repo.get("a");
+  assert.equal(after.city, "Unknown");
+  assert.equal(after.compartmentId, "existing-leads");
+  assert.deepEqual(
+    Object.fromEntries(Object.entries(after).filter(([key]) => !["city", "compartmentId"].includes(key))),
+    before
+  );
+});
+
+test("import replay cannot silently change its destination compartment", async () => {
+  const store = createBlobFake({});
+  const { repo } = makeRepo({ records: [], store });
+  const rows = [{ name: "A", mobile: "01", address: "Jaipur, RJ", category: "", status: "Not Called", followup: "", remarks: "" }];
+  const first = await repo.importMany(rows, {
+    requestId: "request_room",
+    sourceIndexes: [0],
+    compartmentId: "room-a"
+  });
+  const retry = await repo.importMany(rows, {
+    requestId: "request_room",
+    sourceIndexes: [0],
+    compartmentId: "room-b"
+  });
+
+  assert.equal(first.imported[0].compartmentId, "room-a");
+  assert.equal(retry.imported.length, 0);
+  assert.match(retry.errors[0].error, /different lead data/i);
 });

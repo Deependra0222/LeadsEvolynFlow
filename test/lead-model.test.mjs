@@ -17,6 +17,7 @@ test("lead contract exposes the exact statuses and limits", async () => {
     name: 300,
     mobile: 50,
     address: 500,
+    city: 120,
     category: 120,
     remarks: 5_000
   });
@@ -41,6 +42,13 @@ test("internal lead identifiers are path safe", async () => {
   }
 });
 
+test("legacy city derivation is deterministic and safe", async () => {
+  const { deriveCity } = await loadModel();
+  assert.equal(deriveCity("60, Dashrath Path, Jaipur, RJ"), "Jaipur");
+  assert.equal(deriveCity("Jaipur, Rajasthan 302021"), "Jaipur");
+  assert.equal(deriveCity("Private Address"), "Unknown");
+});
+
 test("workflow patches are partial but cannot contain core fields", async () => {
   const { validateWorkflowPatch } = await loadModel();
   assert.deepEqual(validateWorkflowPatch({ remarks: "Called back" }), {
@@ -58,17 +66,48 @@ test("workflow patches are partial but cannot contain core fields", async () => 
   assert.equal(validateWorkflowPatch({ remarks: "x".repeat(5_001) }).ok, false);
 });
 
-test("core edits require exactly the four bounded fields", async () => {
+test("core edits require exactly the five bounded fields including City", async () => {
   const { validateCorePatch } = await loadModel();
   assert.deepEqual(validateCorePatch({
-    name: "  Shop  ", mobile: " 0987 ", address: "  Agra ", category: " Store "
+    name: "  Shop  ", mobile: " 0987 ", address: "  Agra ", city: " Agra ", category: " Store "
   }), {
     ok: true,
-    data: { name: "Shop", mobile: "0987", address: "Agra", category: "Store" }
+    data: { name: "Shop", mobile: "0987", address: "Agra", city: "Agra", category: "Store" }
   });
-  assert.equal(validateCorePatch({ name: "Shop", mobile: "1", address: "", category: "", status: "Called" }).ok, false);
-  assert.equal(validateCorePatch({ name: " ", mobile: "1", address: "", category: "" }).ok, false);
-  assert.equal(validateCorePatch({ name: "Shop", mobile: " ", address: "", category: "" }).ok, false);
+  assert.equal(validateCorePatch({ name: "Shop", mobile: "1", address: "", city: "Agra", category: "", status: "Called" }).ok, false);
+  assert.equal(validateCorePatch({ name: " ", mobile: "1", address: "", city: "Agra", category: "" }).ok, false);
+  assert.equal(validateCorePatch({ name: "Shop", mobile: " ", address: "", city: "Agra", category: "" }).ok, false);
+  assert.equal(validateCorePatch({ name: "Shop", mobile: "1", address: "", city: "", category: "" }).ok, false);
+});
+
+test("imports accept City while stored leads require city and compartment", async () => {
+  const { normalizeStoredLead, validateImportRecords } = await loadModel();
+  const imported = validateImportRecords({
+    name: "A",
+    mobile: "1",
+    address: "Jaipur, RJ",
+    City: " Jaipur "
+  });
+  assert.equal(imported.valid[0].city, "Jaipur");
+
+  const completeLead = {
+    id: "seed-1",
+    sno: 1,
+    name: "A",
+    mobile: "01",
+    address: "Jaipur, RJ",
+    city: "Jaipur",
+    category: "",
+    status: "Called",
+    followup: "",
+    remarks: "ok",
+    compartmentId: "existing-leads",
+    createdAt: "2026-09-24T00:00:00.000Z",
+    updatedAt: "2026-09-24T00:00:00.000Z"
+  };
+  assert.equal(normalizeStoredLead({ ...completeLead, city: "" }), null);
+  assert.equal(normalizeStoredLead({ ...completeLead, compartmentId: "../bad" }), null);
+  assert.deepEqual(normalizeStoredLead(completeLead), completeLead);
 });
 
 test("imports apply defaults and reject unknown fields", async () => {
@@ -76,7 +115,7 @@ test("imports apply defaults and reject unknown fields", async () => {
   const result = validateImportRecords({ name: " Shop ", mobile: " 0123 " });
   assert.deepEqual(result.errors, []);
   assert.deepEqual(result.valid, [{
-    name: "Shop", mobile: "0123", address: "", category: "",
+    name: "Shop", mobile: "0123", address: "", city: "Unknown", category: "",
     status: "Not Called", followup: "", remarks: ""
   }]);
   const unknown = validateImportRecords({ name: "Shop", mobile: "1", project: "Nope" });
@@ -103,6 +142,7 @@ test("imports accept the website's human-readable JSON field labels", async () =
     name: "Example Institute",
     mobile: "09876543210",
     address: "Agra",
+    city: "Unknown",
     category: "Institute",
     status: "Follow-up",
     followup: "2026-10-01T10:30",
@@ -177,6 +217,7 @@ test("imports enforce record and field limits", async () => {
   assert.equal(validateImportRecords({ name: "x".repeat(301), mobile: "1" }).valid.length, 0);
   assert.equal(validateImportRecords({ name: "Name", mobile: "x".repeat(51) }).valid.length, 0);
   assert.equal(validateImportRecords({ name: "Name", mobile: "1", address: "x".repeat(501) }).valid.length, 0);
+  assert.equal(validateImportRecords({ name: "Name", mobile: "1", City: "x".repeat(121) }).valid.length, 0);
   assert.equal(validateImportRecords({ name: "Name", mobile: "1", category: "x".repeat(121) }).valid.length, 0);
 });
 
@@ -185,6 +226,7 @@ test("stored leads normalize complete records", async () => {
   const normalized = normalizeStoredLead({
     id: "seed-1", sno: 1, name: "A", mobile: "01", address: "", category: "",
     status: "Called", followup: "", remarks: "ok",
+    city: "Unknown", compartmentId: "existing-leads",
     createdAt: "2026-09-24T00:00:00.000Z", updatedAt: "2026-09-24T00:00:00.000Z"
   });
   assert.equal(normalized.id, "seed-1");

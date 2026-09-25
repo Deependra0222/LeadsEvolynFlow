@@ -1,3 +1,5 @@
+import { validateCompartmentIdentifier } from "./compartment-model.mjs";
+
 export const STATUS_OPTIONS = [
   "Not Called",
   "Called",
@@ -13,25 +15,27 @@ export const LIMITS = Object.freeze({
   name: 300,
   mobile: 50,
   address: 500,
+  city: 120,
   category: 120,
   remarks: 5_000
 });
 
 const IMPORT_FIELDS = new Set([
-  "sno", "name", "mobile", "address", "category", "status", "followup", "remarks"
+  "sno", "name", "mobile", "address", "city", "category", "status", "followup", "remarks"
 ]);
 const IMPORT_FIELD_ALIASES = new Map([
   ["S.No.", "sno"],
   ["Institute/Business Name", "name"],
   ["Mobile Number", "mobile"],
   ["Area/Address", "address"],
+  ["City", "city"],
   ["Category", "category"],
   ["Call Status", "status"],
   ["Next Follow-up", "followup"],
   ["Remarks", "remarks"]
 ]);
 const WORKFLOW_FIELDS = new Set(["status", "followup", "remarks"]);
-const CORE_FIELDS = ["name", "mobile", "address", "category"];
+const CORE_FIELDS = ["name", "mobile", "address", "city", "category"];
 
 function isObject(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -50,6 +54,17 @@ export function isValidLocalDateTime(value) {
 
 export function validateLeadIdentifier(value) {
   return typeof value === "string" && /^[A-Za-z0-9_-]{1,80}$/.test(value) ? value : null;
+}
+
+export function deriveCity(address) {
+  const parts = String(address || "")
+    .split(",")
+    .map(part => part.trim())
+    .filter(Boolean);
+  if (parts.length < 2) return "Unknown";
+  const state = /^(?:RJ|UP|MP|DL|HR|PB|MH|GJ|Rajasthan|Uttar Pradesh|Madhya Pradesh|Delhi|Haryana|Punjab|Maharashtra|Gujarat)(?:\s+\d{6})?$/i;
+  if (state.test(parts.at(-1))) parts.pop();
+  return parts.at(-1)?.slice(0, LIMITS.city) || "Unknown";
 }
 
 export function validateWorkflowPatch(value) {
@@ -81,7 +96,7 @@ export function validateCorePatch(value) {
   if (!isObject(value)) return { ok: false, error: "Request body must be an object." };
   const keys = Object.keys(value);
   if (keys.length !== CORE_FIELDS.length || keys.some(key => !CORE_FIELDS.includes(key))) {
-    return { ok: false, error: "Core edits must contain only name, mobile, address, and category." };
+    return { ok: false, error: "Core edits must contain only name, mobile, address, city, and category." };
   }
   const data = {};
   for (const key of CORE_FIELDS) {
@@ -90,7 +105,8 @@ export function validateCorePatch(value) {
   }
   if (!data.name) return { ok: false, error: "Name is required." };
   if (!data.mobile) return { ok: false, error: "Mobile is required." };
-  for (const [key, max] of [["name", LIMITS.name], ["mobile", LIMITS.mobile], ["address", LIMITS.address], ["category", LIMITS.category]]) {
+  if (!data.city) return { ok: false, error: "City is required." };
+  for (const [key, max] of [["name", LIMITS.name], ["mobile", LIMITS.mobile], ["address", LIMITS.address], ["city", LIMITS.city], ["category", LIMITS.category]]) {
     if (data[key].length > max) return { ok: false, error: `${key} is too long.` };
   }
   return { ok: true, data };
@@ -122,12 +138,15 @@ function validateImportRow(value, index, seen) {
     name: typeof normalized.name === "string" ? normalized.name.trim() : "",
     mobile: typeof normalized.mobile === "string" ? normalized.mobile.trim() : "",
     address: typeof normalized.address === "string" ? normalized.address.trim() : "",
+    city: typeof normalized.city === "string" && normalized.city.trim()
+      ? normalized.city.trim()
+      : deriveCity(normalized.address),
     category: typeof normalized.category === "string" ? normalized.category.trim() : "",
     status: normalized.status === undefined ? "Not Called" : normalized.status,
     followup: normalized.followup === undefined ? "" : normalized.followup,
     remarks: normalized.remarks === undefined ? "" : normalized.remarks
   };
-  for (const key of ["name", "mobile", "address", "category"]) {
+  for (const key of ["name", "mobile", "address", "city", "category"]) {
     if (normalized[key] !== undefined && typeof normalized[key] !== "string") {
       errors.push({ index, field: key, error: `${key} must be text.` });
     }
@@ -138,7 +157,7 @@ function validateImportRow(value, index, seen) {
   if (normalized.mobile === undefined || (typeof normalized.mobile === "string" && !data.mobile)) {
     errors.push({ index, field: "mobile", error: "Mobile is required." });
   }
-  for (const [key, max] of [["name", LIMITS.name], ["mobile", LIMITS.mobile], ["address", LIMITS.address], ["category", LIMITS.category]]) {
+  for (const [key, max] of [["name", LIMITS.name], ["mobile", LIMITS.mobile], ["address", LIMITS.address], ["city", LIMITS.city], ["category", LIMITS.category]]) {
     if (data[key].length > max) errors.push({ index, field: key, error: `${key} is too long.` });
   }
   if (!STATUS_OPTIONS.includes(data.status)) errors.push({ index, field: "status", error: "Invalid call status." });
@@ -181,16 +200,20 @@ export function validateImportRecords(value, { existingSnos = new Set() } = {}) 
 
 export function normalizeStoredLead(value) {
   if (!isObject(value) || validateLeadIdentifier(value.id) === null || !Number.isInteger(value.sno) || value.sno < 1) return null;
+  if (typeof value.city !== "string" || !value.city.trim() || value.city.trim().length > LIMITS.city) return null;
+  const compartmentId = validateCompartmentIdentifier(value.compartmentId);
+  if (!compartmentId) return null;
   const imported = validateImportRecords({
     sno: value.sno,
     name: value.name,
     mobile: value.mobile,
     address: value.address,
+    city: value.city,
     category: value.category,
     status: value.status,
     followup: value.followup,
     remarks: value.remarks
   });
   if (imported.errors.length || typeof value.createdAt !== "string" || typeof value.updatedAt !== "string") return null;
-  return { id: value.id, ...imported.valid[0], createdAt: value.createdAt, updatedAt: value.updatedAt };
+  return { id: value.id, ...imported.valid[0], compartmentId, createdAt: value.createdAt, updatedAt: value.updatedAt };
 }

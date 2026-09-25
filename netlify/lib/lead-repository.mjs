@@ -1,8 +1,10 @@
-import { normalizeStoredLead, validateImportRecords, validateWorkflowPatch } from "./lead-model.mjs";
+import { validateCompartmentIdentifier } from "./compartment-model.mjs";
+import { deriveCity, normalizeStoredLead, validateImportRecords, validateWorkflowPatch } from "./lead-model.mjs";
 
 const LEAD_PREFIX = "lead/";
 const SERIAL_PREFIX = "serial/";
-const MARKER_KEY = "system/initialized-v2";
+const V2_MARKER_KEY = "system/initialized-v2";
+const V3_MARKER_KEY = "system/initialized-v3";
 
 async function mapWithConcurrency(items, limit, operation) {
   if (!items.length) return [];
@@ -148,21 +150,29 @@ export function createLeadRepository({
   }
 
   function matchesImport(record, input) {
-    return ["name", "mobile", "address", "category"].every(field => record[field] === input[field]) &&
+    return ["name", "mobile", "address", "city", "category", "compartmentId"].every(field => record[field] === input[field]) &&
       (input.sno === undefined || record.sno === input.sno);
   }
 
-  async function importMany(records, { requestId = "", sourceIndexes = [] } = {}) {
+  async function importMany(records, { requestId = "", sourceIndexes = [], compartmentId = "existing-leads" } = {}) {
+    if (!validateCompartmentIdentifier(compartmentId)) {
+      return { imported: [], errors: records.map((_, index) => ({ index, field: "compartmentId", error: "Invalid destination compartment." })) };
+    }
+    const destinationRecords = records.map(input => ({
+      ...input,
+      city: typeof input.city === "string" && input.city.trim() ? input.city.trim() : deriveCity(input.address),
+      compartmentId
+    }));
     const importIndex = await listImportIndex();
     const used = new Set(importIndex.snos);
     const unavailableForAuto = new Set([
       ...used,
-      ...records.filter(record => record.sno !== undefined).map(record => record.sno)
+      ...destinationRecords.filter(record => record.sno !== undefined).map(record => record.sno)
     ]);
     let nextSno = 1;
     const imported = [];
     const errors = [];
-    for (const [index, input] of records.entries()) {
+    for (const [index, input] of destinationRecords.entries()) {
       const preferredId = requestId ? `import-${requestId}-${sourceIndexes[index] ?? index}` : "";
       let sno = input.sno;
       let reservationKey = "";
@@ -278,10 +288,11 @@ export function createLeadRepository({
     return record;
   }
 
-  async function ensureInitialized() {
-    if (await readBlob(MARKER_KEY)) return;
-    const existing = await list();
-    const occupied = new Set(existing.map(record => record.sno));
+  async function ensureSeedRecords(defaultCompartmentId) {
+    if (await readBlob(V2_MARKER_KEY)) return;
+    const existingKeys = await listKeys(LEAD_PREFIX);
+    const existingRaw = await mapWithConcurrency(existingKeys, readLimit, key => readBlob(key));
+    const occupied = new Set(existingRaw.map(record => record?.sno).filter(sno => Number.isInteger(sno) && sno > 0));
     const missing = [];
     for (const seed of seedLeads) {
       if (occupied.has(seed.sno)) continue;
@@ -303,6 +314,7 @@ export function createLeadRepository({
         ...validated,
         ...(workflow.ok ? workflow.data : {}),
         id: `seed-${seed.sno}`,
+        compartmentId: defaultCompartmentId,
         createdAt: timestamp,
         updatedAt: typeof legacy?.updatedAt === "string" ? legacy.updatedAt : timestamp
       });
@@ -313,7 +325,48 @@ export function createLeadRepository({
       const concurrent = normalizeStoredLead(await readBlob(key));
       if (!concurrent || concurrent.sno !== seed.sno) throw new Error(`Could not initialize seed lead ${seed.sno}.`);
     });
-    await store.setJSON(MARKER_KEY, { version: 2, initializedAt: now() });
+    await store.setJSON(V2_MARKER_KEY, { version: 2, initializedAt: now() });
+  }
+
+  async function migrateStoredLead(key, defaultCompartmentId) {
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const current = await retryRead(() => store.getWithMetadata(key, { type: "json" }));
+      if (!current) return;
+      if (normalizeStoredLead(current.data)) return;
+      const raw = current.data;
+      const validation = validateImportRecords({
+        sno: raw?.sno,
+        name: raw?.name,
+        mobile: raw?.mobile,
+        address: raw?.address,
+        city: typeof raw?.city === "string" && raw.city.trim() ? raw.city : deriveCity(raw?.address),
+        category: raw?.category,
+        status: raw?.status,
+        followup: raw?.followup,
+        remarks: raw?.remarks
+      });
+      const compartmentId = validateCompartmentIdentifier(raw?.compartmentId) || defaultCompartmentId;
+      const migrated = validation.errors.length ? null : normalizeStoredLead({
+        id: raw.id,
+        ...validation.valid[0],
+        compartmentId,
+        createdAt: raw.createdAt,
+        updatedAt: raw.updatedAt
+      });
+      if (!migrated) throw new Error(`Could not migrate stored lead ${raw?.id || key}.`);
+      const write = await store.setJSON(key, migrated, { onlyIfMatch: current.etag });
+      if (write.modified) return;
+    }
+    throw new RepositoryConflictError("A lead kept changing during migration.");
+  }
+
+  async function ensureInitialized({ defaultCompartmentId = "existing-leads" } = {}) {
+    if (!validateCompartmentIdentifier(defaultCompartmentId)) throw new Error("Invalid default compartment identifier.");
+    await ensureSeedRecords(defaultCompartmentId);
+    if (await readBlob(V3_MARKER_KEY)) return;
+    const keys = await listKeys(LEAD_PREFIX);
+    await mapWithConcurrency(keys, migrationLimit, key => migrateStoredLead(key, defaultCompartmentId));
+    await store.setJSON(V3_MARKER_KEY, { version: 3, initializedAt: now() });
   }
 
   return {

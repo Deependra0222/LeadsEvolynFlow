@@ -5,8 +5,9 @@ import { createLeadHandler } from "../netlify/lib/lead-data-core.mjs";
 
 const NOW = "2026-09-24T06:00:00.000Z";
 const lead = (overrides = {}) => ({
-  id: "lead-a", sno: 1, name: "A", mobile: "01", address: "Agra", category: "Store",
-  status: "Called", followup: "", remarks: "old", createdAt: NOW, updatedAt: NOW, ...overrides
+  id: "lead-a", sno: 1, name: "A", mobile: "01", address: "Agra", city: "Agra", category: "Store",
+  status: "Called", followup: "", remarks: "old", compartmentId: "existing-leads",
+  createdAt: NOW, updatedAt: NOW, ...overrides
 });
 
 function makeRepository(overrides = {}) {
@@ -291,7 +292,7 @@ test("admin import returns stored rows and maps storage failures to original inp
 test("admin can edit core details and delete a lead", async () => {
   const { handler, repository } = makeHandler();
   const edit = await handler(request("/api/leads/lead-a", "PUT", {
-    name: "Updated", mobile: "02", address: "Lucknow", category: "Retail"
+    name: "Updated", mobile: "02", address: "Lucknow", city: "Lucknow", category: "Retail"
   }, { cookie: "lead_admin_session=ok" }));
   assert.equal(edit.status, 200);
   assert.equal((await edit.json()).lead.name, "Updated");
