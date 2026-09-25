@@ -5,6 +5,34 @@ export function matchesLead(lead, query, status) {
   return (!query || haystack.includes(query)) && (!status || lead.status === status);
 }
 
+function leadOrder(left, right) {
+  return left.sno - right.sno || String(left.id).localeCompare(String(right.id));
+}
+
+export function sortLeadsByArea(leads, mode) {
+  const sorted = [...leads];
+  if (mode !== "area-asc" && mode !== "area-desc") return sorted;
+  const direction = mode === "area-desc" ? -1 : 1;
+  return sorted.sort((left, right) => {
+    const leftArea = String(left.address || "").trim();
+    const rightArea = String(right.address || "").trim();
+    if (!leftArea || !rightArea) {
+      if (!leftArea && !rightArea) return leadOrder(left, right);
+      return leftArea ? -1 : 1;
+    }
+    const areaOrder = leftArea.localeCompare(rightArea, undefined, { sensitivity: "base", numeric: true });
+    return areaOrder ? areaOrder * direction : leadOrder(left, right);
+  });
+}
+
+export function filterAndSortLeads(leads, { query = "", status = "", sortMode = "" } = {}) {
+  const normalizedQuery = String(query).trim().toLowerCase();
+  return sortLeadsByArea(
+    leads.filter(lead => matchesLead(lead, normalizedQuery, status)),
+    sortMode
+  );
+}
+
 export function createLeadState() {
   const confirmed = new Map();
   const drafts = new Map();

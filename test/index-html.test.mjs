@@ -25,6 +25,13 @@ test("viewer keeps shared status, lead list, Update, call, and WhatsApp controls
   assert.match(app, /wa\.me/);
 });
 
+test("viewer can combine area sorting with the existing search and status filter", async () => {
+  const html = await read("../index.html");
+  assert.match(html, /id="areaSort"/);
+  assert.match(html, /value="area-asc"/);
+  assert.match(html, /value="area-desc"/);
+});
+
 test("viewer loads server-owned leads and PATCHes changed workflow fields", async () => {
   const app = await read("../app.mjs");
   assert.match(app, /api\.listLeads\(\)/);

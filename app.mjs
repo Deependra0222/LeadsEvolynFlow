@@ -1,7 +1,7 @@
 import { createApiClient, ApiError } from "./client-api.mjs";
 import { logoutAdmin } from "./client-actions.mjs";
 import { createImportReviewState, createLatestReadGuard, failImportPreview, parseImportText, readJsonFile } from "./client-import.mjs";
-import { createLeadState, matchesLead } from "./client-state.mjs";
+import { createLeadState, filterAndSortLeads } from "./client-state.mjs";
 
 window.__leadAppStarted = true;
 
@@ -12,7 +12,7 @@ const api = createApiClient();
 const state = createLeadState();
 
 const els = Object.fromEntries([
-  "leadList", "search", "statusFilter", "clearFilters", "loadMore", "visibleCount", "topCount",
+  "leadList", "search", "statusFilter", "areaSort", "clearFilters", "loadMore", "visibleCount", "topCount",
   "waTemplate", "jumpTop", "toast", "syncNotice", "adminLogin", "adminLogout", "importLeads",
   "downloadBackup", "loginDialog", "loginForm", "adminPassword", "loginError", "importDialog",
   "jsonText", "jsonFile", "previewImport", "confirmImport", "importPreview", "editDialog", "editForm",
@@ -142,11 +142,11 @@ function render() {
 
 function applyFilters(resetLimit = true) {
   if (resetLimit) renderLimit = PAGE_SIZE;
-  const query = els.search.value.trim().toLowerCase();
-  const status = els.statusFilter.value;
-  filtered = state.allLeads().filter(baseLead => {
-    const lead = state.valuesFor(baseLead.id);
-    return matchesLead(lead, query, status);
+  const leads = state.allLeads().map(baseLead => state.valuesFor(baseLead.id));
+  filtered = filterAndSortLeads(leads, {
+    query: els.search.value,
+    status: els.statusFilter.value,
+    sortMode: els.areaSort.value
   });
   render();
 }
@@ -319,7 +319,13 @@ els.waTemplate.value = savedTemplate || DEFAULT_WA;
 els.waTemplate.addEventListener("change", () => { localStorage.setItem("telecaller_wa_template", els.waTemplate.value); toast("WhatsApp message saved"); applyFilters(false); });
 els.search.addEventListener("input", () => applyFilters(true));
 els.statusFilter.addEventListener("change", () => applyFilters(true));
-els.clearFilters.addEventListener("click", () => { els.search.value = ""; els.statusFilter.value = ""; applyFilters(true); });
+els.areaSort.addEventListener("change", () => applyFilters(true));
+els.clearFilters.addEventListener("click", () => {
+  els.search.value = "";
+  els.statusFilter.value = "";
+  els.areaSort.value = "";
+  applyFilters(true);
+});
 els.loadMore.addEventListener("click", () => { renderLimit += PAGE_SIZE; render(); });
 els.jumpTop.addEventListener("click", () => window.scrollTo({ top: 0, behavior: "smooth" }));
 window.addEventListener("scroll", () => { els.jumpTop.style.display = window.scrollY > 500 ? "block" : "none"; }, { passive: true });

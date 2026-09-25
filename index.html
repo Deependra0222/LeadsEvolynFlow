@@ -82,7 +82,7 @@
     opacity:.55;font-size:17px;pointer-events:none
   }
 
-  .filter-row{display:grid;grid-template-columns:1fr auto;gap:8px}
+  .filter-row{display:grid;grid-template-columns:1fr 1fr;gap:8px}
   .filter{
     width:100%;
     border:1px solid rgba(255,255,255,.15);
@@ -94,6 +94,7 @@
     background:#164c7f;
   }
   .clear-btn{
+    grid-column:1/-1;
     border:1px solid rgba(255,255,255,.28);
     background:rgba(255,255,255,.09);
     color:#fff;
@@ -338,7 +339,8 @@
 
   @media (min-width:640px){
     .controls{grid-template-columns:1.4fr 1fr}
-    .filter-row{grid-template-columns:1fr auto}
+    .filter-row{grid-template-columns:1fr 1fr auto}
+    .clear-btn{grid-column:auto}
     main{padding:16px 14px 90px}
     .work-grid{grid-template-columns:1fr 1fr}
     .work-grid .remarks-field{grid-column:1/-1}
@@ -375,6 +377,11 @@
           <option>Follow-up</option>
           <option>Interested</option>
           <option>Not Interested</option>
+        </select>
+        <select id="areaSort" class="filter sort-filter" aria-label="Sort by area or address">
+          <option value="">Lead order</option>
+          <option value="area-asc">Area A–Z</option>
+          <option value="area-desc">Area Z–A</option>
         </select>
         <button class="clear-btn" id="clearFilters" type="button">Clear</button>
       </div>
