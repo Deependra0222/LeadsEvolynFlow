@@ -1,10 +1,17 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createLeadState, filterAndSortLeads, matchesLead, sortLeadsByArea } from "../client-state.mjs";
+import {
+  buildLeadFacets,
+  createLeadState,
+  createRangeSelection,
+  filterAndSortLeads,
+  matchesLead,
+  sortLeadsByArea
+} from "../client-state.mjs";
 
 const lead = (overrides = {}) => ({
-  id: "a", sno: 1, name: "A", mobile: "1", address: "", category: "",
-  status: "Called", followup: "", remarks: "old", ...overrides
+  id: "a", sno: 1, name: "A", mobile: "1", address: "", city: "Unknown", category: "",
+  status: "Called", followup: "", remarks: "old", compartmentId: "room-a", ...overrides
 });
 
 test("draft values survive rerenders and changedWorkflow emits only differences", () => {
@@ -103,4 +110,70 @@ test("search, status, and area sorting compose in one lead-list operation", () =
     filterAndSortLeads(records, { query: "jaipur", status: "Called", sortMode: "area-asc" }).map(item => item.id),
     ["a", "z"]
   );
+});
+
+test("city and category use OR within a facet and AND across facets", () => {
+  const records = [
+    lead({ id: "jaipur-real-estate", sno: 1, city: "Jaipur", category: "Real estate" }),
+    lead({ id: "agra-real-estate", sno: 2, city: "Agra", category: "REAL ESTATE" }),
+    lead({ id: "jaipur-school", sno: 3, city: "jaipur", category: "School" }),
+    lead({ id: "delhi-real-estate", sno: 4, city: "Delhi", category: "Real estate" })
+  ];
+  const result = filterAndSortLeads(records, {
+    cities: new Set(["Jaipur", "Agra"]),
+    categories: new Set(["Real estate"])
+  });
+  assert.deepEqual(result.map(item => item.id), ["jaipur-real-estate", "agra-real-estate"]);
+});
+
+test("compartment search status facets and area sort compose", () => {
+  const records = [
+    lead({ id: "keep-b", sno: 2, name: "Home", city: "Jaipur", category: "Store", compartmentId: "room-a", address: "B Road" }),
+    lead({ id: "keep-a", sno: 1, name: "Home", city: "Jaipur", category: "Store", compartmentId: "room-a", address: "A Road" }),
+    lead({ id: "wrong-room", sno: 3, name: "Home", city: "Jaipur", category: "Store", compartmentId: "room-b" }),
+    lead({ id: "wrong-status", sno: 4, name: "Home", city: "Jaipur", category: "Store", compartmentId: "room-a", status: "Interested" })
+  ];
+  const result = filterAndSortLeads(records, {
+    query: "home",
+    status: "Called",
+    compartmentId: "room-a",
+    cities: new Set(["jaipur"]),
+    categories: new Set(["store"]),
+    sortMode: "area-asc"
+  });
+  assert.deepEqual(result.map(item => item.id), ["keep-a", "keep-b"]);
+});
+
+test("facet values retain display spelling and merge case-insensitive counts", () => {
+  const facets = buildLeadFacets([
+    lead({ id: "a", city: "Jaipur", category: "Store", compartmentId: "room-a" }),
+    lead({ id: "b", city: "jaipur", category: "store", compartmentId: "room-a" }),
+    lead({ id: "c", city: "", category: "", compartmentId: "room-b" })
+  ], [
+    { id: "room-a", name: "Room A" },
+    { id: "room-b", name: "Room B" }
+  ]);
+  assert.deepEqual(facets.cities, [{ value: "Jaipur", count: 2 }, { value: "Unknown", count: 1 }]);
+  assert.deepEqual(facets.categories, [{ value: "Store", count: 2 }, { value: "Unknown", count: 1 }]);
+  assert.deepEqual(facets.compartments.map(item => [item.id, item.count]), [["room-a", 2], ["room-b", 1]]);
+});
+
+test("Shift selection includes the continuous visible range", () => {
+  const selection = createRangeSelection();
+  selection.toggle("b", 1, false, ["a", "b", "c", "d"]);
+  selection.toggle("d", 3, true, ["a", "b", "c", "d"]);
+  assert.deepEqual(selection.ids(), ["b", "c", "d"]);
+});
+
+test("range selection can deselect a range and clear its anchor", () => {
+  const selection = createRangeSelection();
+  const visible = ["a", "b", "c", "d"];
+  selection.toggle("a", 0, false, visible);
+  selection.toggle("d", 3, true, visible);
+  selection.toggle("b", 1, false, visible);
+  selection.toggle("d", 3, true, visible);
+  assert.deepEqual(selection.ids(), ["a"]);
+  selection.clear();
+  selection.toggle("d", 3, true, visible);
+  assert.deepEqual(selection.ids(), ["d"]);
 });

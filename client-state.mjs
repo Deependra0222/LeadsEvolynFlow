@@ -1,8 +1,17 @@
 const WORKFLOW_FIELDS = ["status", "followup", "remarks"];
 
 export function matchesLead(lead, query, status) {
-  const haystack = `${lead.sno} ${lead.name} ${lead.mobile} ${lead.address} ${lead.category}`.toLowerCase();
+  const haystack = `${lead.sno} ${lead.name} ${lead.mobile} ${lead.address} ${lead.city || ""} ${lead.category}`.toLowerCase();
   return (!query || haystack.includes(query)) && (!status || lead.status === status);
+}
+
+function normalizedFacetValue(value) {
+  const display = String(value || "").trim() || "Unknown";
+  return { display, key: display.toLocaleLowerCase("en-IN") };
+}
+
+function normalizedSet(values) {
+  return new Set([...(values || [])].map(value => normalizedFacetValue(value).key));
 }
 
 function leadOrder(left, right) {
@@ -25,12 +34,79 @@ export function sortLeadsByArea(leads, mode) {
   });
 }
 
-export function filterAndSortLeads(leads, { query = "", status = "", sortMode = "" } = {}) {
+export function filterAndSortLeads(leads, {
+  query = "",
+  status = "",
+  compartmentId = "",
+  cities = new Set(),
+  categories = new Set(),
+  sortMode = ""
+} = {}) {
   const normalizedQuery = String(query).trim().toLowerCase();
+  const cityKeys = normalizedSet(cities);
+  const categoryKeys = normalizedSet(categories);
   return sortLeadsByArea(
-    leads.filter(lead => matchesLead(lead, normalizedQuery, status)),
+    leads.filter(lead => matchesLead(lead, normalizedQuery, status) &&
+      (!compartmentId || lead.compartmentId === compartmentId) &&
+      (!cityKeys.size || cityKeys.has(normalizedFacetValue(lead.city).key)) &&
+      (!categoryKeys.size || categoryKeys.has(normalizedFacetValue(lead.category).key))),
     sortMode
   );
+}
+
+function buildFacet(leads, field) {
+  const values = new Map();
+  for (const lead of leads) {
+    const normalized = normalizedFacetValue(lead[field]);
+    const current = values.get(normalized.key);
+    if (current) current.count += 1;
+    else values.set(normalized.key, { value: normalized.display, count: 1 });
+  }
+  return [...values.values()].sort((left, right) =>
+    left.value.localeCompare(right.value, "en-IN", { sensitivity: "base", numeric: true })
+  );
+}
+
+export function buildLeadFacets(leads, compartments = []) {
+  const counts = new Map();
+  for (const lead of leads) counts.set(lead.compartmentId, (counts.get(lead.compartmentId) || 0) + 1);
+  return {
+    cities: buildFacet(leads, "city"),
+    categories: buildFacet(leads, "category"),
+    compartments: compartments.map(compartment => ({
+      ...compartment,
+      count: counts.get(compartment.id) || 0
+    }))
+  };
+}
+
+export function createRangeSelection() {
+  const selected = new Set();
+  let anchorIndex = null;
+  return {
+    toggle(id, index, shiftKey, visibleIds) {
+      const key = String(id);
+      if (!shiftKey || anchorIndex === null || !Array.isArray(visibleIds)) {
+        if (selected.has(key)) selected.delete(key);
+        else selected.add(key);
+        anchorIndex = index;
+        return;
+      }
+      const desiredSelected = !selected.has(key);
+      const start = Math.max(0, Math.min(anchorIndex, index));
+      const end = Math.min(visibleIds.length - 1, Math.max(anchorIndex, index));
+      for (let current = start; current <= end; current += 1) {
+        const visibleId = String(visibleIds[current]);
+        if (desiredSelected) selected.add(visibleId);
+        else selected.delete(visibleId);
+      }
+    },
+    ids() { return [...selected]; },
+    clear() {
+      selected.clear();
+      anchorIndex = null;
+    }
+  };
 }
 
 export function createLeadState() {
