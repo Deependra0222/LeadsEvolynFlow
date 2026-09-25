@@ -28,6 +28,12 @@ export function createLatestReadGuard() {
   };
 }
 
+export function failImportPreview(review, token, error) {
+  if (!review.isCurrent(token)) return null;
+  review.invalidate();
+  return error?.message || "Preview failed. Please try again.";
+}
+
 export function createImportReviewState({ makeRequestId = () => crypto.randomUUID() } = {}) {
   let generation = 0;
   let pending = null;

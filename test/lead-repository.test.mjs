@@ -82,6 +82,58 @@ test("list reads lead blobs concurrently without exceeding its limit", async () 
   assert.equal(maximum, 2);
 });
 
+test("import index derives serials from keys without downloading lead blobs", async () => {
+  const store = createBlobFake({
+    "lead/seed-1": baseLead({ id: "seed-1", sno: 1 }),
+    "serial/9": { claimedAt: NOW }
+  });
+  store.get = async () => { throw new Error("lead contents must not be downloaded"); };
+  const { repo } = makeRepo({ records: [], store });
+
+  const index = await repo.listImportIndex();
+
+  assert.deepEqual([...index.snos].sort((a, b) => a - b), [1, 9]);
+  assert.deepEqual([...index.leadIds], ["seed-1"]);
+});
+
+test("a stale reservation cannot hide an unreserved non-seed lead from the import index", async () => {
+  const store = createBlobFake({
+    "lead/orphan": baseLead({ id: "orphan", sno: 7 }),
+    "serial/99": { claimedAt: NOW }
+  });
+  const { repo } = makeRepo({ records: [], store });
+
+  const index = await repo.listImportIndex();
+
+  assert.deepEqual([...index.snos].sort((a, b) => a - b), [7, 99]);
+});
+
+test("an import ID without its reservation is still included in the import index", async () => {
+  const store = createBlobFake({
+    "lead/import-request_123-0": baseLead({ id: "import-request_123-0", sno: 7 })
+  });
+  const { repo } = makeRepo({ records: [], store });
+
+  const index = await repo.listImportIndex();
+
+  assert.deepEqual([...index.snos], [7]);
+});
+
+test("list retries a transient Blob read failure", async () => {
+  const store = createBlobFake({ "lead/a": baseLead() });
+  const get = store.get.bind(store);
+  let attempts = 0;
+  store.get = async (...args) => {
+    attempts += 1;
+    if (attempts === 1) throw new Error("temporary Blob failure");
+    return get(...args);
+  };
+  const { repo } = makeRepo({ records: [], store });
+
+  assert.deepEqual((await repo.list()).map(record => record.id), ["a"]);
+  assert.equal(attempts, 2);
+});
+
 test("patchWorkflow merges into the latest record", async () => {
   const { repo } = makeRepo();
   const record = await repo.patchWorkflow("a", { remarks: "new" });
@@ -187,6 +239,90 @@ test("an import recovers when the lead write commits before the storage call thr
   assert.equal(result.imported.length, 1);
   assert.deepEqual(result.errors, []);
   assert.equal((await repo.list()).length, 1);
+});
+
+test("an uncertain committed lead write keeps its serial reservation when recovery reads fail", async () => {
+  const store = createBlobFake({});
+  const setJSON = store.setJSON.bind(store);
+  const get = store.get.bind(store);
+  let interrupted = false;
+  let failedRecoveryReads = 0;
+  store.setJSON = async (key, value, options) => {
+    const result = await setJSON(key, value, options);
+    if (!interrupted && key.startsWith("lead/")) {
+      interrupted = true;
+      throw new Error("response was lost after commit");
+    }
+    return result;
+  };
+  store.get = async (key, options) => {
+    if (key.startsWith("lead/import-") && failedRecoveryReads < 3) {
+      failedRecoveryReads += 1;
+      throw new Error("temporary recovery read failure");
+    }
+    return get(key, options);
+  };
+  const { repo } = makeRepo({ records: [], store });
+  const row = { name: "A", mobile: "01", address: "", category: "", status: "Not Called", followup: "", remarks: "" };
+
+  const result = await repo.importMany([row], { requestId: "request_uncertain", sourceIndexes: [0] });
+
+  assert.equal(result.errors.length, 1);
+  assert.notEqual(await store.get("serial/1"), null);
+});
+
+test("a conclusively uncommitted lead write retains its owned serial for a safe retry", async () => {
+  const store = createBlobFake({});
+  const setJSON = store.setJSON.bind(store);
+  let failLeadOnce = true;
+  store.setJSON = async (key, value, options) => {
+    if (failLeadOnce && key.startsWith("lead/")) {
+      failLeadOnce = false;
+      throw new Error("lead write failed before commit");
+    }
+    return setJSON(key, value, options);
+  };
+  const { repo } = makeRepo({ records: [], store });
+  const row = { sno: 7, name: "A", mobile: "01", address: "", category: "", status: "Not Called", followup: "", remarks: "" };
+
+  const first = await repo.importMany([row], { requestId: "request_release", sourceIndexes: [0] });
+  const reservationAfterFailure = await store.get("serial/7");
+  const retry = await repo.importMany([row], { requestId: "request_release", sourceIndexes: [0] });
+
+  assert.equal(first.errors.length, 1);
+  assert.equal(reservationAfterFailure.ownerId, "import-request_release-0");
+  assert.equal(retry.imported[0].sno, 7);
+});
+
+test("an uncertain uncommitted explicit import can reclaim its owned reservation", async () => {
+  const store = createBlobFake({});
+  const setJSON = store.setJSON.bind(store);
+  const get = store.get.bind(store);
+  let failLeadOnce = true;
+  let failedRecoveryReads = 0;
+  store.setJSON = async (key, value, options) => {
+    if (failLeadOnce && key.startsWith("lead/")) {
+      failLeadOnce = false;
+      throw new Error("lead write outcome is unknown");
+    }
+    return setJSON(key, value, options);
+  };
+  store.get = async (key, options) => {
+    if (key.startsWith("lead/import-") && failedRecoveryReads < 3) {
+      failedRecoveryReads += 1;
+      throw new Error("recovery read unavailable");
+    }
+    return get(key, options);
+  };
+  const { repo } = makeRepo({ records: [], store });
+  const row = { sno: 7, name: "A", mobile: "01", address: "", category: "", status: "Not Called", followup: "", remarks: "" };
+
+  const first = await repo.importMany([row], { requestId: "request_reclaim", sourceIndexes: [0] });
+  const retry = await repo.importMany([row], { requestId: "request_reclaim", sourceIndexes: [0] });
+
+  assert.equal(first.errors.length, 1);
+  assert.equal(retry.imported[0].sno, 7);
+  assert.deepEqual(retry.errors, []);
 });
 
 test("automatic serials skip values explicitly supplied later in the same batch", async () => {

@@ -26,6 +26,19 @@ async function mapWithConcurrency(items, limit, operation) {
   return results;
 }
 
+async function retryRead(operation, attempts = 3) {
+  let lastError;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      return await operation();
+    } catch (error) {
+      lastError = error;
+      if (attempt < attempts) await new Promise(resolve => setTimeout(resolve, attempt * 50));
+    }
+  }
+  throw lastError;
+}
+
 export class RepositoryConflictError extends Error {
   constructor(message = "The lead changed while it was being saved.") {
     super(message);
@@ -45,25 +58,65 @@ export function createLeadRepository({
   const readLimit = Number.isInteger(readConcurrency) && readConcurrency > 0 ? readConcurrency : 32;
   const migrationLimit = Number.isInteger(migrationConcurrency) && migrationConcurrency > 0 ? migrationConcurrency : 16;
 
+  async function listKeys(prefix) {
+    return retryRead(async () => {
+      const keys = [];
+      for await (const page of store.list({ prefix, paginate: true })) {
+        for (const { key } of page.blobs) keys.push(key);
+      }
+      return keys;
+    });
+  }
+
+  function readBlob(key, options = { type: "json" }) {
+    return retryRead(() => store.get(key, options));
+  }
+
   async function list() {
-    const keys = [];
-    for await (const page of store.list({ prefix: LEAD_PREFIX, paginate: true })) {
-      for (const { key } of page.blobs) keys.push(key);
-    }
+    const keys = await listKeys(LEAD_PREFIX);
     const records = (await mapWithConcurrency(keys, readLimit, async key =>
-      normalizeStoredLead(await store.get(key, { type: "json" }))
+      normalizeStoredLead(await readBlob(key))
     )).filter(Boolean);
     return records.sort((left, right) => left.sno - right.sno || left.id.localeCompare(right.id));
   }
 
+  async function listImportIndex() {
+    const [leadKeys, serialKeys] = await Promise.all([
+      listKeys(LEAD_PREFIX),
+      listKeys(SERIAL_PREFIX)
+    ]);
+    const leadIds = new Set(leadKeys.map(key => key.slice(LEAD_PREFIX.length)));
+    const snos = new Set();
+    const nonSeedIds = [];
+    for (const id of leadIds) {
+      const match = /^seed-(\d+)$/.exec(id);
+      if (match && Number(match[1]) > 0) snos.add(Number(match[1]));
+      else nonSeedIds.push(id);
+    }
+    for (const key of serialKeys) {
+      const match = /^serial\/(\d+)$/.exec(key);
+      if (match && Number(match[1]) > 0) snos.add(Number(match[1]));
+    }
+    if (nonSeedIds.length) {
+      const legacyRecords = await mapWithConcurrency(nonSeedIds, readLimit, id => get(id));
+      for (const record of legacyRecords) if (record) snos.add(record.sno);
+    }
+    return { snos, leadIds };
+  }
+
   async function get(id) {
-    return normalizeStoredLead(await store.get(`${LEAD_PREFIX}${id}`, { type: "json" }));
+    return normalizeStoredLead(await readBlob(`${LEAD_PREFIX}${id}`));
+  }
+
+  async function getSerialReservation(sno) {
+    const reservation = await readBlob(`${SERIAL_PREFIX}${sno}`);
+    return reservation && typeof reservation === "object" ? reservation : null;
   }
 
   async function updateWithRetry(id, merge) {
     const key = `${LEAD_PREFIX}${id}`;
     for (let attempt = 0; attempt < 3; attempt += 1) {
-      const current = await store.getWithMetadata(key, { type: "json" });
+      const current = await retryRead(() => store.getWithMetadata(key, { type: "json" }));
       if (!current) return null;
       const normalized = normalizeStoredLead(current.data);
       if (!normalized) return null;
@@ -100,8 +153,8 @@ export function createLeadRepository({
   }
 
   async function importMany(records, { requestId = "", sourceIndexes = [] } = {}) {
-    const existing = await list();
-    const used = new Set(existing.map(record => record.sno));
+    const importIndex = await listImportIndex();
+    const used = new Set(importIndex.snos);
     const unavailableForAuto = new Set([
       ...used,
       ...records.filter(record => record.sno !== undefined).map(record => record.sno)
@@ -114,9 +167,11 @@ export function createLeadRepository({
       let sno = input.sno;
       let reservationKey = "";
       let ownsReservation = false;
+      let releaseReservationOnFailure = false;
+      let commitUncertain = false;
       try {
         if (preferredId) {
-          const prior = await get(preferredId);
+          const prior = importIndex.leadIds.has(preferredId) ? await get(preferredId) : null;
           if (prior) {
             if (!matchesImport(prior, input)) throw new RepositoryConflictError("This import request was already used for different lead data.");
             imported.push(prior);
@@ -129,33 +184,46 @@ export function createLeadRepository({
             while (unavailableForAuto.has(nextSno)) nextSno += 1;
             sno = nextSno;
             reservationKey = `${SERIAL_PREFIX}${sno}`;
-            const reservation = await store.setJSON(reservationKey, { claimedAt: now() }, { onlyIfNew: true });
+            const reservation = await store.setJSON(reservationKey, { claimedAt: now(), ownerId: preferredId }, { onlyIfNew: true });
             if (reservation.modified) {
               ownsReservation = true;
+              releaseReservationOnFailure = !preferredId;
               break;
             }
             unavailableForAuto.add(sno);
             nextSno += 1;
           }
         } else {
-          if (used.has(sno)) throw new RepositoryConflictError(`Serial number ${sno} already exists.`);
           reservationKey = `${SERIAL_PREFIX}${sno}`;
-          const reservation = await store.setJSON(reservationKey, { claimedAt: now() }, { onlyIfNew: true });
-          if (!reservation.modified) throw new RepositoryConflictError(`Serial number ${sno} already exists.`);
-          ownsReservation = true;
+          const existingReservation = preferredId && used.has(sno) ? await getSerialReservation(sno) : null;
+          if (existingReservation?.ownerId === preferredId) {
+            ownsReservation = true;
+          } else {
+            if (used.has(sno)) throw new RepositoryConflictError(`Serial number ${sno} already exists.`);
+            const reservation = await store.setJSON(reservationKey, { claimedAt: now(), ownerId: preferredId }, { onlyIfNew: true });
+            if (!reservation.modified) throw new RepositoryConflictError(`Serial number ${sno} already exists.`);
+            ownsReservation = true;
+            releaseReservationOnFailure = !preferredId;
+          }
         }
         const timestamp = now();
         const record = { ...input, sno, createdAt: timestamp, updatedAt: timestamp };
         if (!preferredId) {
-          imported.push(await createRecord(record));
+          commitUncertain = true;
+          const created = await createRecord(record);
+          commitUncertain = false;
+          imported.push(created);
           used.add(sno);
           unavailableForAuto.add(sno);
           continue;
         }
         const candidate = normalizeStoredLead({ ...record, id: preferredId });
         if (!candidate) throw new Error("The new lead is invalid.");
+        commitUncertain = true;
         const write = await store.setJSON(`${LEAD_PREFIX}${preferredId}`, candidate, { onlyIfNew: true });
+        commitUncertain = false;
         if (write.modified) {
+          importIndex.leadIds.add(preferredId);
           imported.push(candidate);
           used.add(sno);
           unavailableForAuto.add(sno);
@@ -176,6 +244,7 @@ export function createLeadRepository({
         if (preferredId) {
           try {
             const committed = await get(preferredId);
+            commitUncertain = false;
             if (committed && matchesImport(committed, input)) {
               if (committed.sno !== sno && ownsReservation) {
                 await store.delete(reservationKey);
@@ -188,7 +257,7 @@ export function createLeadRepository({
             }
           } catch { /* report the original write failure when recovery cannot be verified */ }
         }
-        if (ownsReservation) {
+        if (releaseReservationOnFailure && !commitUncertain) {
           try { await store.delete(reservationKey); } catch { /* a stale reservation is safer than a duplicate serial */ }
         }
         errors.push({
@@ -210,7 +279,7 @@ export function createLeadRepository({
   }
 
   async function ensureInitialized() {
-    if (await store.get(MARKER_KEY, { type: "json" })) return;
+    if (await readBlob(MARKER_KEY)) return;
     const existing = await list();
     const occupied = new Set(existing.map(record => record.sno));
     const missing = [];
@@ -222,7 +291,7 @@ export function createLeadRepository({
       missing.push({ seed, validated: validation.valid[0] });
     }
     await mapWithConcurrency(missing, migrationLimit, async ({ seed, validated }) => {
-      const legacy = await store.get(`lead-${seed.sno}`, { type: "json" });
+      const legacy = await readBlob(`lead-${seed.sno}`);
       const workflowCandidate = {
         status: legacy?.status ?? seed.status ?? "Not Called",
         followup: legacy?.followup ?? seed.followup ?? "",
@@ -241,7 +310,7 @@ export function createLeadRepository({
       const key = `${LEAD_PREFIX}${record.id}`;
       const write = await store.setJSON(key, record, { onlyIfNew: true });
       if (write.modified) return;
-      const concurrent = normalizeStoredLead(await store.get(key, { type: "json" }));
+      const concurrent = normalizeStoredLead(await readBlob(key));
       if (!concurrent || concurrent.sno !== seed.sno) throw new Error(`Could not initialize seed lead ${seed.sno}.`);
     });
     await store.setJSON(MARKER_KEY, { version: 2, initializedAt: now() });
@@ -250,7 +319,9 @@ export function createLeadRepository({
   return {
     ensureInitialized,
     list,
+    listImportIndex,
     get,
+    getSerialReservation,
     patchWorkflow,
     importMany,
     updateCore,

@@ -16,6 +16,13 @@ function makeRepository(overrides = {}) {
     calls,
     async ensureInitialized() { calls.ensure += 1; },
     async list() { return [...records.values()]; },
+    async listImportIndex() {
+      return {
+        snos: new Set([...records.values()].map(record => record.sno)),
+        leadIds: new Set(records.keys())
+      };
+    },
+    async getSerialReservation() { return null; },
     async get(id) { return records.get(id) || null; },
     async patchWorkflow(id, patch) {
       calls.patch.push({ id, patch });
@@ -164,6 +171,24 @@ test("admin import preview reports valid rows and errors without writing", async
   assert.deepEqual(repository.calls.imports, []);
 });
 
+test("admin import preview uses the lightweight serial index instead of loading every lead", async () => {
+  const repository = makeRepository({
+    async list() { throw new Error("full lead list must not be loaded for import preview"); },
+    async listImportIndex() {
+      return { snos: new Set([1]), leadIds: new Set(["lead-a"]) };
+    }
+  });
+  const { handler } = makeHandler({ repository });
+
+  const response = await handler(request("/api/leads/import", "POST", {
+    preview: true,
+    records: [{ name: "Good", mobile: "2" }]
+  }, { cookie: "lead_admin_session=ok" }));
+
+  assert.equal(response.status, 200);
+  assert.equal((await response.json()).valid[0].sno, 2);
+});
+
 test("admin import writes only validated records", async () => {
   const { handler, repository } = makeHandler();
   const response = await handler(request("/api/leads/import", "POST", {
@@ -201,7 +226,8 @@ test("confirmed import retries can replay their previously stored explicit seria
     category: ""
   });
   const repository = makeRepository({
-    async list() { return [prior]; },
+    async listImportIndex() { return { snos: new Set([prior.sno]), leadIds: new Set([prior.id]) }; },
+    async get(id) { return id === prior.id ? prior : null; },
     async importMany() { return { imported: [prior], errors: [] }; }
   });
   const { handler } = makeHandler({ repository });
@@ -213,6 +239,27 @@ test("confirmed import retries can replay their previously stored explicit seria
 
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), { imported: [prior], errors: [] });
+});
+
+test("confirmed import retry accepts an explicit serial reservation owned by the same request", async () => {
+  const stored = lead({ id: "import-request_owned-0", sno: 9, name: "Owned", mobile: "9" });
+  const repository = makeRepository({
+    async listImportIndex() { return { snos: new Set([1, 9]), leadIds: new Set(["lead-a"]) }; },
+    async getSerialReservation(sno) {
+      return sno === 9 ? { claimedAt: NOW, ownerId: "import-request_owned-0" } : null;
+    },
+    async importMany() { return { imported: [stored], errors: [] }; }
+  });
+  const { handler } = makeHandler({ repository });
+
+  const response = await handler(request("/api/leads/import", "POST", {
+    preview: false,
+    requestId: "request_owned",
+    records: [{ sno: 9, name: "Owned", mobile: "9" }]
+  }, { cookie: "lead_admin_session=ok" }));
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), { imported: [stored], errors: [] });
 });
 
 test("admin import returns stored rows and maps storage failures to original input rows", async () => {

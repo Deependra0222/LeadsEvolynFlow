@@ -7,18 +7,37 @@ export class ApiError extends Error {
   }
 }
 
-export function createApiClient(fetchImpl = fetch) {
-  async function requestJson(path, { method = "GET", body } = {}) {
-    const options = { method, credentials: "same-origin", headers: { accept: "application/json" } };
-    if (body !== undefined) {
-      options.headers["content-type"] = "application/json";
-      options.body = JSON.stringify(body);
+export function createApiClient(fetchImpl = fetch, { timeoutMs = 30_000 } = {}) {
+  async function withTimeout(operation) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      return await operation(controller.signal);
+    } catch (error) {
+      if (controller.signal.aborted) throw new ApiError("Request took too long. Please try again.", 408);
+      throw error;
+    } finally {
+      clearTimeout(timeout);
     }
-    const response = await fetchImpl(path, options);
-    let payload = {};
-    try { payload = await response.json(); } catch { payload = {}; }
-    if (!response.ok) throw new ApiError(payload.error || "Request failed.", response.status, payload.errors);
-    return payload;
+  }
+
+  async function requestJson(path, { method = "GET", body } = {}) {
+    return withTimeout(async signal => {
+      const options = { method, credentials: "same-origin", signal, headers: { accept: "application/json" } };
+      if (body !== undefined) {
+        options.headers["content-type"] = "application/json";
+        options.body = JSON.stringify(body);
+      }
+      const response = await fetchImpl(path, options);
+      let payload = {};
+      try { payload = await response.json(); }
+      catch (error) {
+        if (signal.aborted) throw error;
+        payload = {};
+      }
+      if (!response.ok) throw new ApiError(payload.error || "Request failed.", response.status, payload.errors);
+      return payload;
+    });
   }
 
   return {
@@ -32,15 +51,21 @@ export function createApiClient(fetchImpl = fetch) {
     async updateLead(id, core) { return (await requestJson(`/api/leads/${encodeURIComponent(id)}`, { method: "PUT", body: core })).lead; },
     async deleteLead(id) { return requestJson(`/api/leads/${encodeURIComponent(id)}`, { method: "DELETE" }); },
     async downloadBackup() {
-      const response = await fetchImpl("/api/admin/export", { method: "GET", credentials: "same-origin", headers: { accept: "application/json" } });
-      if (!response.ok) {
-        let payload = {};
-        try { payload = await response.json(); } catch { payload = {}; }
-        throw new ApiError(payload.error || "Backup download failed.", response.status);
-      }
-      const disposition = response.headers.get("content-disposition") || "";
-      const filename = disposition.match(/filename="([^"]+)"/)?.[1] || "telecaller-leads.json";
-      return { blob: await response.blob(), filename };
+      return withTimeout(async signal => {
+        const response = await fetchImpl("/api/admin/export", { method: "GET", credentials: "same-origin", signal, headers: { accept: "application/json" } });
+        if (!response.ok) {
+          let payload = {};
+          try { payload = await response.json(); }
+          catch (error) {
+            if (signal.aborted) throw error;
+            payload = {};
+          }
+          throw new ApiError(payload.error || "Backup download failed.", response.status);
+        }
+        const disposition = response.headers.get("content-disposition") || "";
+        const filename = disposition.match(/filename="([^"]+)"/)?.[1] || "telecaller-leads.json";
+        return { blob: await response.blob(), filename };
+      });
     }
   };
 }

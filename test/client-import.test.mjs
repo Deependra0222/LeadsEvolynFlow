@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createImportReviewState, createLatestReadGuard, parseImportText, readJsonFile } from "../client-import.mjs";
+import * as importTools from "../client-import.mjs";
 
 test("parseImportText accepts one object or a non-empty array", () => {
   assert.deepEqual(parseImportText(' { "name": "A" } ').records, [{ name: "A" }]);
@@ -56,6 +57,16 @@ test("a partial import keeps its reviewed request available for a safe retry", (
   });
   assert.equal(review.complete({ errors: [] }), true);
   assert.equal(review.confirmPayload(), null);
+});
+
+test("a current preview failure clears the pending review and returns a visible message", () => {
+  const review = createImportReviewState({ makeRequestId: () => "request_timeout" });
+  const attempt = review.begin([{ name: "A" }]);
+
+  assert.equal(typeof importTools.failImportPreview, "function");
+  assert.equal(importTools.failImportPreview(review, attempt.token, new Error("Request took too long. Please try again.")), "Request took too long. Please try again.");
+  assert.equal(review.isCurrent(attempt.token), false);
+  assert.equal(importTools.failImportPreview(review, attempt.token, new Error("stale")), null);
 });
 
 test("latest read guard rejects older file results and manual-input races", () => {

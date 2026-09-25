@@ -1,6 +1,6 @@
 import { createApiClient, ApiError } from "./client-api.mjs";
 import { logoutAdmin } from "./client-actions.mjs";
-import { createImportReviewState, createLatestReadGuard, parseImportText, readJsonFile } from "./client-import.mjs";
+import { createImportReviewState, createLatestReadGuard, failImportPreview, parseImportText, readJsonFile } from "./client-import.mjs";
 import { createLeadState, matchesLead } from "./client-state.mjs";
 
 window.__leadAppStarted = true;
@@ -250,8 +250,9 @@ els.previewImport.addEventListener("click", async () => {
     const result = await api.previewImport(attempt.records);
     if (importReview.accept(attempt.token, result)) renderImportPreview(result);
   } catch (error) {
-    if (importReview.isCurrent(attempt.token)) {
-      importReview.invalidate();
+    const message = failImportPreview(importReview, attempt.token, error);
+    if (message) {
+      els.importPreview.textContent = message;
       adminFailure(error, "Preview failed");
     }
   }

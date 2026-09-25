@@ -40,6 +40,53 @@ test("API client exposes safe structured errors", async () => {
   });
 });
 
+test("API client aborts a stalled import preview with a useful timeout error", async () => {
+  const api = createApiClient(async (_path, options) => {
+    if (!options.signal) throw new Error("missing abort signal");
+    return new Promise((resolve, reject) => {
+      options.signal.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), { once: true });
+    });
+  }, { timeoutMs: 5 });
+
+  await assert.rejects(api.previewImport([{ name: "A" }]), error => {
+    assert.ok(error instanceof ApiError);
+    assert.equal(error.status, 408);
+    assert.match(error.message, /too long/i);
+    return true;
+  });
+});
+
+test("API client treats a timeout while reading JSON as a timeout rather than empty success", async () => {
+  const api = createApiClient(async (_path, options) => ({
+    ok: true,
+    status: 200,
+    json: () => new Promise((resolve, reject) => {
+      options.signal.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), { once: true });
+    })
+  }), { timeoutMs: 5 });
+
+  await assert.rejects(api.previewImport([{ name: "A" }]), error => {
+    assert.ok(error instanceof ApiError);
+    assert.equal(error.status, 408);
+    return true;
+  });
+});
+
+test("API client also times out a stalled backup download", async () => {
+  const api = createApiClient(async (_path, options) => {
+    if (!options.signal) throw new Error("missing abort signal");
+    return new Promise((resolve, reject) => {
+      options.signal.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), { once: true });
+    });
+  }, { timeoutMs: 5 });
+
+  await assert.rejects(api.downloadBackup(), error => {
+    assert.ok(error instanceof ApiError);
+    assert.equal(error.status, 408);
+    return true;
+  });
+});
+
 test("API client maps session, login, import, edit, and delete responses", async () => {
   const calls = [];
   const api = createApiClient(async (path, options) => {

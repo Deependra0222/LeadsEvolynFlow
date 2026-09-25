@@ -149,15 +149,28 @@ export function createLeadHandler({
           return json({ error: "Confirmed imports require a valid request ID." }, 400);
         }
         await repository.ensureInitialized();
-        const existing = await repository.list();
+        const existing = await repository.listImportIndex();
         const submittedRecords = Array.isArray(parsed.value.records) ? parsed.value.records : [parsed.value.records];
-        const replayIds = parsed.value.preview ? new Set() : new Set(
-          submittedRecords.map((_, index) => `import-${parsed.value.requestId}-${index}`)
-        );
+        const replayIds = parsed.value.preview ? new Set() : new Set(submittedRecords.map(
+          (_, index) => `import-${parsed.value.requestId}-${index}`
+        ));
+        const replaySnos = new Set();
+        for (const [index, id] of [...replayIds].entries()) {
+          if (existing.leadIds.has(id)) {
+            const prior = await repository.get(id);
+            if (prior) replaySnos.add(prior.sno);
+            continue;
+          }
+          const record = submittedRecords[index];
+          const sno = record?.sno ?? record?.["S.No."];
+          if (!Number.isInteger(sno) || sno < 1 || !existing.snos.has(sno)) continue;
+          const reservation = await repository.getSerialReservation(sno);
+          if (reservation?.ownerId === id) replaySnos.add(sno);
+        }
         const validated = validateImportRecords(parsed.value.records, {
-          existingSnos: new Set(existing.filter(lead => !replayIds.has(lead.id)).map(lead => lead.sno))
+          existingSnos: new Set([...existing.snos].filter(sno => !replaySnos.has(sno)))
         });
-        const reserved = new Set(existing.map(lead => lead.sno));
+        const reserved = new Set(existing.snos);
         for (const record of validated.valid) if (record.sno !== undefined) reserved.add(record.sno);
         let nextSno = 1;
         const proposedRows = validated.validRows.map(({ index, data: record }) => {
