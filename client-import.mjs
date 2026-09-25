@@ -41,15 +41,19 @@ export function createImportReviewState({ makeRequestId = () => crypto.randomUUI
   const copy = value => JSON.parse(JSON.stringify(value));
 
   return {
-    begin(records) {
+    begin(records, compartmentId) {
       generation += 1;
-      pending = { token: generation, requestId: makeRequestId(), records: copy(records) };
+      pending = { token: generation, requestId: makeRequestId(), records: copy(records), compartmentId };
       reviewed = null;
-      return { token: pending.token, records: copy(pending.records) };
+      return { token: pending.token, records: copy(pending.records), compartmentId: pending.compartmentId };
     },
     accept(token, result) {
       if (!pending || token !== generation || token !== pending.token) return false;
-      reviewed = result.valid.length ? { requestId: pending.requestId, records: copy(pending.records) } : null;
+      reviewed = result.valid.length ? {
+        requestId: pending.requestId,
+        records: copy(pending.records),
+        compartmentId: pending.compartmentId
+      } : null;
       pending = null;
       return true;
     },

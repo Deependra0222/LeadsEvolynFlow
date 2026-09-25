@@ -25,20 +25,22 @@ test("import confirmation uses only the immutable payload from the latest accept
   const ids = ["request_first", "request_second"];
   const review = createImportReviewState({ makeRequestId: () => ids.shift() });
   const firstSource = [{ name: "First" }];
-  const first = review.begin(firstSource);
+  const first = review.begin(firstSource, "room-first");
   firstSource[0].name = "Changed after request";
-  const second = review.begin([{ name: "Second" }]);
+  const second = review.begin([{ name: "Second" }], "room-second");
 
   assert.equal(review.accept(first.token, { valid: [{ index: 0 }] }), false);
   assert.equal(review.confirmPayload(), null);
   assert.equal(review.accept(second.token, { valid: [{ index: 0 }] }), true);
   assert.deepEqual(review.confirmPayload(), {
     requestId: "request_second",
-    records: [{ name: "Second" }]
+    records: [{ name: "Second" }],
+    compartmentId: "room-second"
   });
   assert.deepEqual(review.confirmPayload(), {
     requestId: "request_second",
-    records: [{ name: "Second" }]
+    records: [{ name: "Second" }],
+    compartmentId: "room-second"
   });
 
   review.invalidate();
@@ -47,13 +49,14 @@ test("import confirmation uses only the immutable payload from the latest accept
 
 test("a partial import keeps its reviewed request available for a safe retry", () => {
   const review = createImportReviewState({ makeRequestId: () => "request_retry" });
-  const preview = review.begin([{ name: "A" }, { name: "B" }]);
+  const preview = review.begin([{ name: "A" }, { name: "B" }], "room-a");
   review.accept(preview.token, { valid: [{ index: 0 }, { index: 1 }] });
 
   assert.equal(review.complete({ errors: [{ index: 1, field: "$" }] }), false);
   assert.deepEqual(review.confirmPayload(), {
     requestId: "request_retry",
-    records: [{ name: "A" }, { name: "B" }]
+    records: [{ name: "A" }, { name: "B" }],
+    compartmentId: "room-a"
   });
   assert.equal(review.complete({ errors: [] }), true);
   assert.equal(review.confirmPayload(), null);
@@ -61,7 +64,7 @@ test("a partial import keeps its reviewed request available for a safe retry", (
 
 test("a current preview failure clears the pending review and returns a visible message", () => {
   const review = createImportReviewState({ makeRequestId: () => "request_timeout" });
-  const attempt = review.begin([{ name: "A" }]);
+  const attempt = review.begin([{ name: "A" }], "room-a");
 
   assert.equal(typeof importTools.failImportPreview, "function");
   assert.equal(importTools.failImportPreview(review, attempt.token, new Error("Request took too long. Please try again.")), "Request took too long. Please try again.");

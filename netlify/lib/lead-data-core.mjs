@@ -5,6 +5,7 @@ import {
   validateLeadIdentifier,
   validateWorkflowPatch
 } from "./lead-model.mjs";
+import { validateCompartmentIdentifier } from "./compartment-model.mjs";
 
 function json(body, status = 200, extraHeaders = {}) {
   return Response.json(body, {
@@ -64,10 +65,17 @@ function methodNotAllowed(allow) {
 
 export function createLeadHandler({
   repository,
+  compartmentRepository,
   auth,
   loginLimiter,
   now = () => new Date().toISOString()
 }) {
+  async function ensureReady() {
+    const defaultCompartment = await compartmentRepository.ensureExistingLeads();
+    await repository.ensureInitialized({ defaultCompartmentId: defaultCompartment.id });
+    return defaultCompartment;
+  }
+
   return async function handle(request) {
     const url = new URL(request.url);
     const path = apiPath(url.pathname);
@@ -85,8 +93,20 @@ export function createLeadHandler({
     try {
       if (path === "/api/leads") {
         if (request.method !== "GET") return methodNotAllowed(["GET", "OPTIONS"]);
-        await repository.ensureInitialized();
+        await ensureReady();
         return json({ leads: await repository.list() });
+      }
+
+      if (path === "/api/compartments") {
+        if (request.method !== "GET") return methodNotAllowed(["GET", "OPTIONS"]);
+        await ensureReady();
+        const [compartments, leads] = await Promise.all([compartmentRepository.list(), repository.list()]);
+        const counts = new Map();
+        for (const lead of leads) counts.set(lead.compartmentId, (counts.get(lead.compartmentId) || 0) + 1);
+        return json({ compartments: compartments.map(compartment => ({
+          ...compartment,
+          count: counts.get(compartment.id) || 0
+        })) });
       }
 
       if (path === "/api/admin/session") {
@@ -124,7 +144,7 @@ export function createLeadHandler({
         if (request.method !== "GET") return methodNotAllowed(["GET", "OPTIONS"]);
         const unauthorized = requireAdmin(request, auth);
         if (unauthorized) return unauthorized;
-        await repository.ensureInitialized();
+        await ensureReady();
         const contents = JSON.stringify(await repository.exportAll(), null, 2);
         return new Response(contents, {
           status: 200,
@@ -143,12 +163,15 @@ export function createLeadHandler({
         const parsed = await readJson(request);
         if (!parsed.ok) return parsed.response;
         if (!parsed.value || typeof parsed.value !== "object" || typeof parsed.value.preview !== "boolean" || !("records" in parsed.value)) {
-          return json({ error: "Import body must contain preview and records." }, 400);
+          return json({ error: "Import body must contain preview, compartmentId, and records." }, 400);
         }
+        const compartmentId = validateCompartmentIdentifier(parsed.value.compartmentId);
+        if (!compartmentId) return json({ error: "Import requires a valid destination compartment." }, 400);
         if (!parsed.value.preview && (typeof parsed.value.requestId !== "string" || !/^[A-Za-z0-9_-]{8,60}$/.test(parsed.value.requestId))) {
           return json({ error: "Confirmed imports require a valid request ID." }, 400);
         }
-        await repository.ensureInitialized();
+        await ensureReady();
+        await compartmentRepository.assertWritable(compartmentId);
         const existing = await repository.listImportIndex();
         const submittedRecords = Array.isArray(parsed.value.records) ? parsed.value.records : [parsed.value.records];
         const replayIds = parsed.value.preview ? new Set() : new Set(submittedRecords.map(
@@ -188,7 +211,8 @@ export function createLeadHandler({
         const result = validated.valid.length
           ? await repository.importMany(validated.valid, {
               requestId: parsed.value.requestId,
-              sourceIndexes: validated.validRows.map(row => row.index)
+              sourceIndexes: validated.validRows.map(row => row.index),
+              compartmentId
             })
           : { imported: [], errors: [] };
         const storageErrors = result.errors.map(error => ({
@@ -207,7 +231,7 @@ export function createLeadHandler({
         if (!parsed.ok) return parsed.response;
         const validated = validateWorkflowPatch(parsed.value);
         if (!validated.ok) return json({ error: validated.error }, validated.status);
-        await repository.ensureInitialized();
+        await ensureReady();
         const record = await repository.patchWorkflow(id, validated.data);
         return record ? json({ lead: record }) : json({ error: "Lead not found." }, 404);
       }
@@ -218,7 +242,7 @@ export function createLeadHandler({
         if (!id) return json({ error: "Invalid lead ID." }, 400);
         const unauthorized = requireAdmin(request, auth);
         if (unauthorized) return unauthorized;
-        await repository.ensureInitialized();
+        await ensureReady();
         if (request.method === "PUT") {
           const parsed = await readJson(request);
           if (!parsed.ok) return parsed.response;
@@ -234,9 +258,97 @@ export function createLeadHandler({
         return methodNotAllowed(["PUT", "DELETE", "OPTIONS"]);
       }
 
+      if (path === "/api/admin/compartments") {
+        if (request.method !== "POST") return methodNotAllowed(["POST", "OPTIONS"]);
+        const unauthorized = requireAdmin(request, auth);
+        if (unauthorized) return unauthorized;
+        const parsed = await readJson(request);
+        if (!parsed.ok) return parsed.response;
+        if (!parsed.value || typeof parsed.value !== "object" || Object.keys(parsed.value).length !== 1 || typeof parsed.value.name !== "string") {
+          return json({ error: "Compartment creation requires a name." }, 400);
+        }
+        await ensureReady();
+        return json({ compartment: await compartmentRepository.create(parsed.value.name) }, 201);
+      }
+
+      if (path === "/api/admin/leads/move") {
+        if (request.method !== "POST") return methodNotAllowed(["POST", "OPTIONS"]);
+        const unauthorized = requireAdmin(request, auth);
+        if (unauthorized) return unauthorized;
+        const parsed = await readJson(request);
+        if (!parsed.ok) return parsed.response;
+        const leadIds = parsed.value?.leadIds;
+        const compartmentId = validateCompartmentIdentifier(parsed.value?.compartmentId);
+        if (!Array.isArray(leadIds) || leadIds.length < 1 || leadIds.length > LIMITS.importRecords || leadIds.some(id => !validateLeadIdentifier(id)) || !compartmentId) {
+          return json({ error: "Provide 1 to 1,000 valid lead IDs and one destination compartment." }, 400);
+        }
+        await ensureReady();
+        await compartmentRepository.assertWritable(compartmentId);
+        return json(await repository.moveMany(leadIds, compartmentId));
+      }
+
+      const compartmentExportMatch = /^\/api\/admin\/compartments\/([^/]+)\/export$/.exec(path);
+      if (compartmentExportMatch) {
+        if (request.method !== "GET") return methodNotAllowed(["GET", "OPTIONS"]);
+        const unauthorized = requireAdmin(request, auth);
+        if (unauthorized) return unauthorized;
+        const id = validateCompartmentIdentifier(decodeURIComponent(compartmentExportMatch[1]));
+        if (!id) return json({ error: "Invalid compartment ID." }, 400);
+        await ensureReady();
+        const compartment = await compartmentRepository.get(id);
+        if (!compartment) return json({ error: "Compartment not found." }, 404);
+        const slug = compartment.name.toLocaleLowerCase("en-IN").replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || id;
+        return new Response(JSON.stringify(await repository.exportCompartment(id), null, 2), {
+          status: 200,
+          headers: {
+            "content-type": "application/json; charset=utf-8",
+            "cache-control": "no-store",
+            "content-disposition": `attachment; filename="${slug}-${now().slice(0, 10)}.json"`
+          }
+        });
+      }
+
+      const compartmentMatch = /^\/api\/admin\/compartments\/([^/]+)$/.exec(path);
+      if (compartmentMatch) {
+        const unauthorized = requireAdmin(request, auth);
+        if (unauthorized) return unauthorized;
+        const id = validateCompartmentIdentifier(decodeURIComponent(compartmentMatch[1]));
+        if (!id) return json({ error: "Invalid compartment ID." }, 400);
+        await ensureReady();
+        if (request.method === "PUT") {
+          const parsed = await readJson(request);
+          if (!parsed.ok) return parsed.response;
+          if (!parsed.value || typeof parsed.value !== "object" || Object.keys(parsed.value).length !== 1 || typeof parsed.value.name !== "string") {
+            return json({ error: "Compartment rename requires a name." }, 400);
+          }
+          const compartment = await compartmentRepository.rename(id, parsed.value.name);
+          return compartment ? json({ compartment }) : json({ error: "Compartment not found." }, 404);
+        }
+        if (request.method === "DELETE") {
+          const parsed = await readJson(request);
+          if (!parsed.ok) return parsed.response;
+          const compartment = await compartmentRepository.get(id);
+          if (!compartment) return json({ error: "Compartment not found." }, 404);
+          if (!parsed.value || typeof parsed.value !== "object" || parsed.value.confirmation !== compartment.name) {
+            return json({ error: "Type the exact compartment name to confirm deletion." }, 400);
+          }
+          const deleting = await compartmentRepository.beginDelete(id);
+          if (!deleting) return json({ error: "Compartment not found." }, 404);
+          const result = await repository.removeByCompartment(id);
+          if (result.errors.length) {
+            return json({ error: "Some leads could not be deleted. Retry to continue.", ...result }, 503);
+          }
+          await compartmentRepository.finishDelete(id);
+          return json({ deleted: true, id, deletedLeads: result.deleted.length });
+        }
+        return methodNotAllowed(["PUT", "DELETE", "OPTIONS"]);
+      }
+
       if (path.startsWith("/api/leads") || path.startsWith("/api/admin")) return json({ error: "Not found." }, 404);
       return json({ error: "Not found." }, 404);
     } catch (error) {
+      if (error?.code === "NOT_FOUND") return json({ error: error.message }, 404);
+      if (error?.code === "VALIDATION") return json({ error: error.message }, 400);
       if (error?.code === "CONFLICT") return json({ error: error.message }, 409);
       return json({ error: "Shared storage is temporarily unavailable." }, 500);
     }

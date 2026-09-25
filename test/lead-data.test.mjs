@@ -55,6 +55,43 @@ function makeRepository(overrides = {}) {
   };
 }
 
+function makeCompartmentRepository(overrides = {}) {
+  const records = new Map([
+    ["existing-leads", { id: "existing-leads", name: "Existing Leads", createdAt: NOW, updatedAt: NOW }],
+    ["room-a", { id: "room-a", name: "Room A", createdAt: NOW, updatedAt: NOW }]
+  ]);
+  const calls = { create: [], rename: [], beginDelete: [], finishDelete: [], writable: [] };
+  return {
+    calls,
+    async ensureExistingLeads() { return records.get("existing-leads"); },
+    async list() { return [...records.values()]; },
+    async get(id) { return records.get(id) || null; },
+    async assertWritable(id) {
+      calls.writable.push(id);
+      const record = records.get(id);
+      if (!record) throw Object.assign(new Error("Compartment not found."), { code: "NOT_FOUND" });
+      return record;
+    },
+    async create(name) {
+      calls.create.push(name);
+      const record = { id: "new-room", name, createdAt: NOW, updatedAt: NOW };
+      records.set(record.id, record);
+      return record;
+    },
+    async rename(id, name) {
+      calls.rename.push({ id, name });
+      const current = records.get(id);
+      if (!current) return null;
+      const record = { ...current, name, updatedAt: NOW };
+      records.set(id, record);
+      return record;
+    },
+    async beginDelete(id) { calls.beginDelete.push(id); return records.get(id) || null; },
+    async finishDelete(id) { calls.finishDelete.push(id); records.delete(id); },
+    ...overrides
+  };
+}
+
 function makeAuth(overrides = {}) {
   return {
     configured: true,
@@ -66,9 +103,13 @@ function makeAuth(overrides = {}) {
   };
 }
 
-function makeHandler({ repository = makeRepository(), auth = makeAuth(), limiter } = {}) {
+function makeHandler({ repository = makeRepository(), compartmentRepository = makeCompartmentRepository(), auth = makeAuth(), limiter } = {}) {
   const loginLimiter = limiter || { check: () => ({ allowed: true, retryAfterSeconds: 0 }) };
-  return { handler: createLeadHandler({ repository, auth, loginLimiter, now: () => NOW }), repository };
+  return {
+    handler: createLeadHandler({ repository, compartmentRepository, auth, loginLimiter, now: () => NOW }),
+    repository,
+    compartmentRepository
+  };
 }
 
 function request(path, method = "GET", body, options = {}) {
@@ -161,6 +202,7 @@ test("admin import preview reports valid rows and errors without writing", async
   const { handler, repository } = makeHandler();
   const response = await handler(request("/api/leads/import", "POST", {
     preview: true,
+    compartmentId: "room-a",
     records: [{ name: "Good", mobile: "2" }, { name: "", mobile: "3" }]
   }, { cookie: "lead_admin_session=ok" }));
   assert.equal(response.status, 200);
@@ -183,6 +225,7 @@ test("admin import preview uses the lightweight serial index instead of loading 
 
   const response = await handler(request("/api/leads/import", "POST", {
     preview: true,
+    compartmentId: "room-a",
     records: [{ name: "Good", mobile: "2" }]
   }, { cookie: "lead_admin_session=ok" }));
 
@@ -195,6 +238,7 @@ test("admin import writes only validated records", async () => {
   const response = await handler(request("/api/leads/import", "POST", {
     preview: false,
     requestId: "request_123",
+    compartmentId: "room-a",
     records: [{ name: "Good", mobile: "2" }, { name: "", mobile: "3" }]
   }, { cookie: "lead_admin_session=ok" }));
   assert.equal(response.status, 200);
@@ -203,7 +247,7 @@ test("admin import writes only validated records", async () => {
   assert.equal(body.errors.length, 1);
   assert.equal(repository.calls.imports[0].length, 1);
   assert.equal(repository.calls.imports[0][0].sno, undefined);
-  assert.deepEqual(repository.calls.importOptions[0], { requestId: "request_123", sourceIndexes: [0] });
+  assert.deepEqual(repository.calls.importOptions[0], { requestId: "request_123", sourceIndexes: [0], compartmentId: "room-a" });
 });
 
 test("admin import rejects unsafe request identifiers", async () => {
@@ -211,6 +255,7 @@ test("admin import rejects unsafe request identifiers", async () => {
   const response = await handler(request("/api/leads/import", "POST", {
     preview: false,
     requestId: "../unsafe",
+    compartmentId: "room-a",
     records: [{ name: "Good", mobile: "2" }]
   }, { cookie: "lead_admin_session=ok" }));
   assert.equal(response.status, 400);
@@ -235,6 +280,7 @@ test("confirmed import retries can replay their previously stored explicit seria
   const response = await handler(request("/api/leads/import", "POST", {
     preview: false,
     requestId: "request_123",
+    compartmentId: "room-a",
     records: [{ sno: 9, name: "Previously stored", mobile: "9", address: "", category: "" }]
   }, { cookie: "lead_admin_session=ok" }));
 
@@ -256,6 +302,7 @@ test("confirmed import retry accepts an explicit serial reservation owned by the
   const response = await handler(request("/api/leads/import", "POST", {
     preview: false,
     requestId: "request_owned",
+    compartmentId: "room-a",
     records: [{ sno: 9, name: "Owned", mobile: "9" }]
   }, { cookie: "lead_admin_session=ok" }));
 
@@ -276,6 +323,7 @@ test("admin import returns stored rows and maps storage failures to original inp
   const response = await handler(request("/api/leads/import", "POST", {
     preview: false,
     requestId: "request_partial_123",
+    compartmentId: "room-a",
     records: [
       { name: "", mobile: "bad" },
       { name: "Stored", mobile: "2" },
@@ -308,6 +356,58 @@ test("admin export downloads complete JSON", async () => {
   assert.equal(response.status, 200);
   assert.match(response.headers.get("content-disposition"), /attachment; filename="telecaller-leads-2026-09-24.json"/);
   assert.equal((await response.json()).length, 1);
+});
+
+test("public compartment list includes lead counts while mutations require admin", async () => {
+  const { handler } = makeHandler();
+  const response = await handler(request("/api/compartments"));
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.deepEqual(body.compartments.map(item => [item.id, item.count]), [
+    ["existing-leads", 1],
+    ["room-a", 0]
+  ]);
+  assert.equal((await handler(request("/api/admin/compartments", "POST", { name: "A" }))).status, 401);
+});
+
+test("admin can create rename export move and delete a compartment", async () => {
+  const repository = makeRepository({
+    async moveMany(leadIds, compartmentId) { return { moved: leadIds.map(id => lead({ id, compartmentId })), unchanged: [], errors: [] }; },
+    async exportCompartment() { return [{ "Institute/Business Name": "A" }]; },
+    async removeByCompartment() { return { deleted: [lead()], errors: [] }; }
+  });
+  const { handler, compartmentRepository } = makeHandler({ repository });
+  const authOptions = { cookie: "lead_admin_session=ok" };
+
+  assert.equal((await handler(request("/api/admin/compartments", "POST", { name: "New Room" }, authOptions))).status, 201);
+  assert.equal((await handler(request("/api/admin/compartments/room-a", "PUT", { name: "Renamed" }, authOptions))).status, 200);
+  const moved = await handler(request("/api/admin/leads/move", "POST", { leadIds: ["lead-a"], compartmentId: "room-a" }, authOptions));
+  assert.equal((await moved.json()).moved[0].compartmentId, "room-a");
+  const exported = await handler(request("/api/admin/compartments/room-a/export", "GET", undefined, authOptions));
+  assert.match(exported.headers.get("content-disposition"), /renamed-2026-09-24\.json/);
+  const deleted = await handler(request("/api/admin/compartments/room-a", "DELETE", { confirmation: "Renamed" }, authOptions));
+  assert.equal(deleted.status, 200);
+  assert.deepEqual(compartmentRepository.calls.beginDelete, ["room-a"]);
+  assert.deepEqual(compartmentRepository.calls.finishDelete, ["room-a"]);
+});
+
+test("import requires one writable destination compartment", async () => {
+  const { handler } = makeHandler();
+  const response = await handler(request("/api/leads/import", "POST", {
+    preview: true,
+    compartmentId: "missing",
+    records: [{ name: "A", mobile: "1" }]
+  }, { cookie: "lead_admin_session=ok" }));
+  assert.equal(response.status, 404);
+});
+
+test("compartment deletion requires the exact current name", async () => {
+  const { handler, compartmentRepository } = makeHandler();
+  const response = await handler(request("/api/admin/compartments/room-a", "DELETE", {
+    confirmation: "room a"
+  }, { cookie: "lead_admin_session=ok" }));
+  assert.equal(response.status, 400);
+  assert.deepEqual(compartmentRepository.calls.beginDelete, []);
 });
 
 test("unsupported methods, OPTIONS, and storage failures are safe", async () => {
