@@ -1,7 +1,7 @@
 import { createApiClient, ApiError } from "./client-api.mjs";
 import { logoutAdmin } from "./client-actions.mjs";
 import { createImportReviewState, createLatestReadGuard, failImportPreview, parseImportText, readJsonFile } from "./client-import.mjs";
-import { createLeadState, filterAndSortLeads } from "./client-state.mjs";
+import { buildLeadFacets, createLeadState, createRangeSelection, filterAndSortLeads } from "./client-state.mjs";
 
 window.__leadAppStarted = true;
 
@@ -10,21 +10,33 @@ const DEFAULT_WA = "Hello, I’m contacting {name} regarding a business enquiry.
 const PAGE_SIZE = 40;
 const api = createApiClient();
 const state = createLeadState();
+const selection = createRangeSelection();
+const importReview = createImportReviewState();
+const fileReadGuard = createLatestReadGuard();
 
 const els = Object.fromEntries([
   "leadList", "search", "statusFilter", "areaSort", "clearFilters", "loadMore", "visibleCount", "topCount",
   "waTemplate", "jumpTop", "toast", "syncNotice", "adminLogin", "adminLogout", "importLeads",
   "downloadBackup", "loginDialog", "loginForm", "adminPassword", "loginError", "importDialog",
-  "jsonText", "jsonFile", "previewImport", "confirmImport", "importPreview", "editDialog", "editForm",
-  "editName", "editMobile", "editAddress", "editCategory", "deleteDialog", "deleteLeadName", "confirmDelete"
+  "jsonText", "jsonFile", "previewImport", "confirmImport", "importPreview", "importCompartment",
+  "importNewCompartment", "createImportCompartment", "editDialog", "editForm", "editName", "editMobile",
+  "editAddress", "editCity", "editCategory", "deleteDialog", "deleteLeadName", "confirmDelete",
+  "compartmentNav", "filterToggle", "filterPanel", "cityFilters", "categoryFilters", "activeFilters",
+  "manageCompartments", "compartmentDialog", "newCompartmentName", "createCompartment", "compartmentRows",
+  "deleteCompartmentDialog", "deleteCompartmentLabel", "deleteCompartmentName", "confirmCompartmentDelete",
+  "bulkMoveBar", "selectedCount", "moveDestination", "moveSelected", "clearSelection"
 ].map(id => [id, document.getElementById(id)]));
 
 let renderLimit = PAGE_SIZE;
 let filtered = [];
-const importReview = createImportReviewState();
-const fileReadGuard = createLatestReadGuard();
+let compartments = [];
+let activeCompartmentId = "";
+let selectedCities = new Set();
+let selectedCategories = new Set();
 let activeEditId = "";
 let activeDeleteId = "";
+let activeDeleteCompartmentId = "";
+let adminEnabled = false;
 
 function esc(value) {
   return String(value ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;")
@@ -42,10 +54,11 @@ function normalizeIndiaNumber(value) {
   return { tel: `+${digits}`, wa: digits };
 }
 
-function setAdminMode(enabled) {
-  document.body.dataset.admin = String(Boolean(enabled));
-  els.adminLogin.hidden = Boolean(enabled);
-  els.adminLogout.hidden = !enabled;
+function toast(message) {
+  els.toast.textContent = message;
+  els.toast.classList.add("show");
+  clearTimeout(window.__toastTimer);
+  window.__toastTimer = setTimeout(() => els.toast.classList.remove("show"), 1800);
 }
 
 function setNotice(message, kind = "") {
@@ -53,29 +66,80 @@ function setNotice(message, kind = "") {
   els.syncNotice.className = `sync-notice${kind ? ` ${kind}` : ""}`;
 }
 
-function toast(message) {
-  els.toast.textContent = message;
-  els.toast.classList.add("show");
-  clearTimeout(window.__toastTimer);
-  window.__toastTimer = setTimeout(() => els.toast.classList.remove("show"), 1600);
+function setAdminMode(enabled) {
+  adminEnabled = Boolean(enabled);
+  document.body.dataset.admin = String(adminEnabled);
+  els.adminLogin.hidden = adminEnabled;
+  els.adminLogout.hidden = !adminEnabled;
+  if (!adminEnabled) selection.clear();
+  if (state.allLeads().length) render();
+}
+
+function adminFailure(error, fallback) {
+  if (error instanceof ApiError && error.status === 401) {
+    setAdminMode(false);
+    toast("Admin session expired. Please log in again.");
+  } else toast(error?.message || fallback);
 }
 
 function statusOptions(selected) {
   return STATUS_OPTIONS.map(status => `<option${status === selected ? " selected" : ""}>${status}</option>`).join("");
 }
 
+function compartmentName(id) {
+  return compartments.find(item => item.id === id)?.name || "Unavailable compartment";
+}
+
+function renderCompartmentOptions(select, selected = "", includePlaceholder = false) {
+  const options = compartments.map(item => `<option value="${esc(item.id)}"${item.id === selected ? " selected" : ""}>${esc(item.name)} (${item.count ?? 0})</option>`);
+  select.innerHTML = `${includePlaceholder ? '<option value="">Choose a compartment</option>' : ""}${options.join("")}`;
+}
+
+function renderCompartmentNav() {
+  const facets = buildLeadFacets(state.allLeads(), compartments);
+  compartments = facets.compartments;
+  els.compartmentNav.innerHTML = [
+    `<button class="compartment-tab${activeCompartmentId ? "" : " active"}" type="button" data-compartment="">All Leads (${state.allLeads().length})</button>`,
+    ...compartments.map(item => `<button class="compartment-tab${activeCompartmentId === item.id ? " active" : ""}" type="button" data-compartment="${esc(item.id)}">${esc(item.name)} (${item.count})</button>`)
+  ].join("");
+  renderCompartmentOptions(els.moveDestination, els.moveDestination.value);
+  renderCompartmentOptions(els.importCompartment, els.importCompartment.value || activeCompartmentId, true);
+}
+
+function renderFacetGroup(container, facets, selected, facet) {
+  container.innerHTML = facets.length ? facets.map(item => `<label class="facet-option">
+    <input class="facet-checkbox" type="checkbox" data-facet="${facet}" value="${esc(item.value)}"${selected.has(item.value) ? " checked" : ""}>
+    <span>${esc(item.value)} (${item.count})</span>
+  </label>`).join("") : '<span class="helper">No values available</span>';
+}
+
+function renderFilters() {
+  const facets = buildLeadFacets(state.allLeads(), compartments);
+  renderFacetGroup(els.cityFilters, facets.cities, selectedCities, "city");
+  renderFacetGroup(els.categoryFilters, facets.categories, selectedCategories, "category");
+  const chips = [];
+  if (activeCompartmentId) chips.push(`Compartment: ${compartmentName(activeCompartmentId)}`);
+  for (const city of selectedCities) chips.push(`City: ${city}`);
+  for (const category of selectedCategories) chips.push(`Category: ${category}`);
+  els.activeFilters.innerHTML = chips.map(value => `<span class="filter-chip">${esc(value)}</span>`).join("");
+}
+
 function cardHtml(baseLead) {
   const lead = state.valuesFor(baseLead.id) || baseLead;
   const number = normalizeIndiaNumber(lead.mobile);
   const message = encodeURIComponent((els.waTemplate.value || DEFAULT_WA).replaceAll("{name}", lead.name));
+  const selected = new Set(selection.ids()).has(String(lead.id));
   return `<article class="card" data-id="${esc(lead.id)}">
     <div class="card-head">
+      <label class="card-select admin-only"><input class="lead-select" type="checkbox"${selected ? " checked" : ""}> Select lead</label>
       <div class="sno">LEAD #${esc(lead.sno)}</div>
       <h2 class="biz">${esc(lead.name)}</h2>
       <a class="phone" href="tel:${esc(number.tel)}">${esc(lead.mobile)}</a>
     </div>
     <div class="card-body">
       <div class="meta">
+        <div class="meta-row"><div class="label">Compartment</div><div class="value"><span class="compartment-badge">${esc(compartmentName(lead.compartmentId))}</span></div></div>
+        <div class="meta-row"><div class="label">City / Area</div><div class="value">${esc(lead.city || "Unknown")}</div></div>
         <div class="meta-row"><div class="label">Area/Address</div><div class="value">${esc(lead.address || "—")}</div></div>
         <div class="meta-row"><div class="label">Category</div><div class="value">${esc(lead.category || "—")}</div></div>
       </div>
@@ -97,19 +161,54 @@ function cardHtml(baseLead) {
   </article>`;
 }
 
+function renderBulkBar() {
+  const count = selection.ids().length;
+  els.selectedCount.textContent = `${count} selected`;
+  els.bulkMoveBar.hidden = !adminEnabled || count === 0;
+}
+
+function render() {
+  renderCompartmentNav();
+  renderFilters();
+  const visible = filtered.slice(0, renderLimit);
+  els.topCount.textContent = `${state.allLeads().length} leads`;
+  els.visibleCount.textContent = `Showing ${visible.length} of ${filtered.length}`;
+  els.loadMore.hidden = visible.length >= filtered.length;
+  renderBulkBar();
+  if (!visible.length) {
+    els.leadList.innerHTML = '<div class="empty">No leads match the current filters.</div>';
+    return;
+  }
+  els.leadList.innerHTML = visible.map(cardHtml).join("");
+  els.leadList.querySelectorAll(".card").forEach((article, index) => wireCard(article, visible[index], index));
+}
+
+function applyFilters({ resetLimit = true, clearSelection = false } = {}) {
+  if (resetLimit) renderLimit = PAGE_SIZE;
+  if (clearSelection) selection.clear();
+  const leads = state.allLeads().map(baseLead => state.valuesFor(baseLead.id));
+  filtered = filterAndSortLeads(leads, {
+    query: els.search.value,
+    status: els.statusFilter.value,
+    compartmentId: activeCompartmentId,
+    cities: selectedCities,
+    categories: selectedCategories,
+    sortMode: els.areaSort.value
+  });
+  render();
+}
+
 async function saveLead(baseLead, article) {
   const patch = state.changedWorkflow(baseLead.id);
-  if (Object.keys(patch).length === 0) return toast("No changes to save");
+  if (!Object.keys(patch).length) return toast("No changes to save");
   const button = article.querySelector(".update-btn");
   button.disabled = true;
   button.textContent = "Saving…";
   try {
     const saved = await api.patchWorkflow(baseLead.id, patch);
     state.confirmSaved(saved);
-    button.textContent = "Saved";
-    button.classList.add("saved");
     toast("Lead updated");
-    setTimeout(() => applyFilters(false), 450);
+    applyFilters({ resetLimit: false });
   } catch {
     button.disabled = false;
     button.textContent = "Update";
@@ -117,7 +216,7 @@ async function saveLead(baseLead, article) {
   }
 }
 
-function wireCard(article, baseLead) {
+function wireCard(article, baseLead, visibleIndex) {
   for (const [selector, field] of [[".status-input", "status"], [".followup-input", "followup"], [".remarks-input", "remarks"]]) {
     const input = article.querySelector(selector);
     input.addEventListener("input", () => state.rememberInput(baseLead.id, field, input.value));
@@ -125,52 +224,32 @@ function wireCard(article, baseLead) {
   article.querySelector(".update-btn").addEventListener("click", () => saveLead(baseLead, article));
   article.querySelector(".edit-lead").addEventListener("click", () => openEdit(baseLead.id));
   article.querySelector(".delete-lead").addEventListener("click", () => openDelete(baseLead.id));
-}
-
-function render() {
-  const visible = filtered.slice(0, renderLimit);
-  els.topCount.textContent = `${state.allLeads().length} leads`;
-  els.visibleCount.textContent = `Showing ${visible.length} of ${filtered.length}`;
-  els.loadMore.hidden = visible.length >= filtered.length;
-  if (!visible.length) {
-    els.leadList.innerHTML = '<div class="empty">No leads match the current filters.</div>';
-    return;
-  }
-  els.leadList.innerHTML = visible.map(cardHtml).join("");
-  els.leadList.querySelectorAll(".card").forEach((article, index) => wireCard(article, visible[index]));
-}
-
-function applyFilters(resetLimit = true) {
-  if (resetLimit) renderLimit = PAGE_SIZE;
-  const leads = state.allLeads().map(baseLead => state.valuesFor(baseLead.id));
-  filtered = filterAndSortLeads(leads, {
-    query: els.search.value,
-    status: els.statusFilter.value,
-    sortMode: els.areaSort.value
+  article.querySelector(".lead-select").addEventListener("click", event => {
+    selection.toggle(baseLead.id, visibleIndex, event.shiftKey, filtered.map(item => item.id));
+    render();
   });
-  render();
 }
 
-async function loadLeads() {
+async function loadAll() {
   setNotice("Loading shared leads...");
-  els.leadList.innerHTML = "";
   try {
-    state.replaceLeads(await api.listLeads());
+    const [leads, loadedCompartments] = await Promise.all([api.listLeads(), api.listCompartments()]);
+    state.replaceLeads(leads);
+    compartments = loadedCompartments;
+    if (activeCompartmentId && !compartments.some(item => item.id === activeCompartmentId)) activeCompartmentId = "";
     setNotice("Shared lead data loaded", "success");
-    applyFilters(true);
+    applyFilters({ clearSelection: true });
   } catch {
     setNotice("Could not load shared lead data.", "warning");
     els.leadList.innerHTML = '<div class="empty">Lead data could not be loaded.<br><button id="retryLeads" class="load-more" type="button">Retry loading leads</button></div>';
     els.loadMore.hidden = true;
-    document.getElementById("retryLeads").addEventListener("click", loadLeads);
+    document.getElementById("retryLeads").addEventListener("click", loadAll);
   }
 }
 
-function adminFailure(error, fallback) {
-  if (error instanceof ApiError && error.status === 401) {
-    setAdminMode(false);
-    toast("Admin session expired. Please log in again.");
-  } else toast(error.message || fallback);
+async function refreshCompartments() {
+  compartments = await api.listCompartments();
+  render();
 }
 
 function openEdit(id) {
@@ -179,6 +258,7 @@ function openEdit(id) {
   els.editName.value = lead.name;
   els.editMobile.value = lead.mobile;
   els.editAddress.value = lead.address;
+  els.editCity.value = lead.city;
   els.editCategory.value = lead.category;
   els.editDialog.showModal();
 }
@@ -189,14 +269,59 @@ function openDelete(id) {
   els.deleteDialog.showModal();
 }
 
-function renderImportPreview(result) {
-  const validRows = result.valid.map(lead => `<tr><td>${lead.index + 1}</td><td>${esc(lead.sno)}</td><td>${esc(lead.name)}</td><td>${esc(lead.mobile)}</td><td>Ready</td></tr>`);
+function renderImportPreview(result, compartmentId = els.importCompartment.value) {
+  const validRows = result.valid.map(lead => `<tr><td>${lead.index + 1}</td><td>${esc(lead.sno)}</td><td>${esc(lead.name)}</td><td>${esc(lead.city)}</td><td>Ready</td></tr>`);
   const invalidRows = result.errors.map(error => `<tr><td>${error.index + 1}</td><td>—</td><td colspan="2">${esc(error.field)}</td><td class="error-text">${esc(error.error)}</td></tr>`);
-  els.importPreview.innerHTML = `<p>${result.valid.length} valid, ${result.errors.length} issue(s)</p><div class="table-wrap"><table><thead><tr><th>Row</th><th>S.No</th><th>Name</th><th>Mobile</th><th>Result</th></tr></thead><tbody>${[...validRows, ...invalidRows].join("")}</tbody></table></div>`;
+  els.importPreview.innerHTML = `<p class="destination-note">Destination: ${esc(compartmentName(compartmentId))}</p><p>${result.valid.length} valid, ${result.errors.length} issue(s)</p><div class="table-wrap"><table><thead><tr><th>Row</th><th>S.No</th><th>Name</th><th>City</th><th>Result</th></tr></thead><tbody>${[...validRows, ...invalidRows].join("")}</tbody></table></div>`;
   els.confirmImport.disabled = result.valid.length === 0;
 }
 
-els.adminLogin.addEventListener("click", () => { els.loginError.textContent = ""; els.loginDialog.showModal(); els.adminPassword.focus(); });
+function openImport() {
+  importReview.invalidate();
+  fileReadGuard.invalidate();
+  els.jsonText.value = "";
+  els.jsonFile.value = "";
+  els.importNewCompartment.value = "";
+  renderCompartmentOptions(els.importCompartment, activeCompartmentId, true);
+  els.importPreview.textContent = "Choose a destination, paste JSON or choose a file, then preview it.";
+  els.confirmImport.disabled = true;
+  els.importDialog.showModal();
+}
+
+function renderCompartmentRows() {
+  els.compartmentRows.innerHTML = compartments.map(item => `<div class="compartment-row" data-id="${esc(item.id)}">
+    <input class="compartment-name-input" value="${esc(item.name)}" maxlength="80" aria-label="Compartment name">
+    <button class="mini-btn rename-compartment" type="button">Rename</button>
+    <button class="mini-btn export-compartment" type="button">Download (${item.count ?? 0})</button>
+    <button class="mini-btn danger delete-compartment" type="button">Delete</button>
+  </div>`).join("");
+}
+
+async function createCompartmentFrom(value, onCreated) {
+  const name = value.trim();
+  if (!name) return toast("Enter a compartment name");
+  try {
+    const created = await api.createCompartment(name);
+    await refreshCompartments();
+    onCreated?.(created);
+    toast("Compartment created");
+  } catch (error) { adminFailure(error, "Could not create compartment"); }
+}
+
+async function downloadCompartment(id) {
+  try {
+    const { blob, filename } = await api.downloadCompartment(id);
+    const url = URL.createObjectURL(blob);
+    Object.assign(document.createElement("a"), { href: url, download: filename }).click();
+    URL.revokeObjectURL(url);
+  } catch (error) { adminFailure(error, "Download failed"); }
+}
+
+els.adminLogin.addEventListener("click", () => {
+  els.loginError.textContent = "";
+  els.loginDialog.showModal();
+  els.adminPassword.focus();
+});
 els.loginForm.addEventListener("submit", async event => {
   event.preventDefault();
   els.loginError.textContent = "";
@@ -205,25 +330,43 @@ els.loginForm.addEventListener("submit", async event => {
     setAdminMode(true);
     els.loginDialog.close();
     toast("Admin mode enabled");
-  } catch (error) {
-    els.loginError.textContent = error.message;
-  } finally {
-    els.adminPassword.value = "";
-  }
+  } catch (error) { els.loginError.textContent = error.message; }
+  finally { els.adminPassword.value = ""; }
 });
 els.adminLogout.addEventListener("click", async () => {
   try { await logoutAdmin({ api, setAdminMode, notify: toast }); }
-  catch { /* logoutAdmin keeps admin mode active and shows the retry message */ }
+  catch { /* the helper keeps admin mode active and shows a retry message */ }
 });
-els.importLeads.addEventListener("click", () => {
+
+els.compartmentNav.addEventListener("click", event => {
+  const button = event.target.closest("[data-compartment]");
+  if (!button) return;
+  activeCompartmentId = button.dataset.compartment;
+  applyFilters({ clearSelection: true });
+});
+els.filterToggle.addEventListener("click", () => {
+  const open = els.filterPanel.classList.toggle("open");
+  els.filterToggle.setAttribute("aria-expanded", String(open));
+});
+els.filterPanel.addEventListener("change", event => {
+  if (!event.target.classList.contains("facet-checkbox")) return;
+  const target = event.target.dataset.facet === "city" ? selectedCities : selectedCategories;
+  if (event.target.checked) target.add(event.target.value);
+  else target.delete(event.target.value);
+  applyFilters({ clearSelection: true });
+});
+
+els.importLeads.addEventListener("click", openImport);
+els.importCompartment.addEventListener("change", () => {
   importReview.invalidate();
-  fileReadGuard.invalidate();
-  els.jsonText.value = "";
-  els.jsonFile.value = "";
-  els.importPreview.textContent = "Paste JSON or choose a file, then preview it.";
   els.confirmImport.disabled = true;
-  els.importDialog.showModal();
+  els.importPreview.textContent = "Destination changed. Preview the JSON again.";
 });
+els.createImportCompartment.addEventListener("click", () => createCompartmentFrom(els.importNewCompartment.value, created => {
+  renderCompartmentOptions(els.importCompartment, created.id, true);
+  els.importNewCompartment.value = "";
+  importReview.invalidate();
+}));
 els.jsonText.addEventListener("input", () => {
   importReview.invalidate();
   fileReadGuard.invalidate();
@@ -236,19 +379,24 @@ els.jsonFile.addEventListener("change", async () => {
   try {
     const text = await readJsonFile(els.jsonFile.files[0], { maxBytes: 2_000_000 });
     if (fileReadGuard.isCurrent(token)) els.jsonText.value = text;
-  } catch (error) {
-    if (fileReadGuard.isCurrent(token)) toast(error.message);
-  }
+  } catch (error) { if (fileReadGuard.isCurrent(token)) toast(error.message); }
 });
 els.previewImport.addEventListener("click", async () => {
+  const compartmentId = els.importCompartment.value;
+  if (!compartmentId) return toast("Choose a destination compartment");
   const parsed = parseImportText(els.jsonText.value);
-  if (!parsed.ok) { importReview.invalidate(); els.importPreview.textContent = parsed.error; els.confirmImport.disabled = true; return; }
-  const attempt = importReview.begin(parsed.records);
+  if (!parsed.ok) {
+    importReview.invalidate();
+    els.importPreview.textContent = parsed.error;
+    els.confirmImport.disabled = true;
+    return;
+  }
+  const attempt = importReview.begin(parsed.records, compartmentId);
   els.confirmImport.disabled = true;
   els.importPreview.textContent = "Checking JSON...";
   try {
-    const result = await api.previewImport(attempt.records);
-    if (importReview.accept(attempt.token, result)) renderImportPreview(result);
+    const result = await api.previewImport(attempt.records, attempt.compartmentId);
+    if (importReview.accept(attempt.token, result)) renderImportPreview(result, attempt.compartmentId);
   } catch (error) {
     const message = failImportPreview(importReview, attempt.token, error);
     if (message) {
@@ -262,16 +410,16 @@ els.confirmImport.addEventListener("click", async () => {
   if (!reviewed) return;
   els.confirmImport.disabled = true;
   try {
-    const result = await api.importLeads(reviewed.records, reviewed.requestId);
+    const result = await api.importLeads(reviewed.records, reviewed.requestId, reviewed.compartmentId);
     const complete = importReview.complete(result);
     result.imported.forEach(record => state.upsertLead(record));
-    applyFilters(true);
+    await refreshCompartments();
+    applyFilters();
     if (complete) {
       toast(`Imported ${result.imported.length} lead(s)`);
       els.importDialog.close();
-    }
-    else {
-      renderImportPreview({ valid: [], errors: result.errors });
+    } else {
+      renderImportPreview({ valid: [], errors: result.errors }, reviewed.compartmentId);
       els.confirmImport.disabled = false;
       toast(`Imported ${result.imported.length}; ${result.errors.length} row(s) can be retried`);
     }
@@ -280,16 +428,88 @@ els.confirmImport.addEventListener("click", async () => {
     els.confirmImport.disabled = !importReview.confirmPayload();
   }
 });
+
+els.manageCompartments.addEventListener("click", () => {
+  renderCompartmentRows();
+  els.newCompartmentName.value = "";
+  els.compartmentDialog.showModal();
+});
+els.createCompartment.addEventListener("click", () => createCompartmentFrom(els.newCompartmentName.value, () => {
+  els.newCompartmentName.value = "";
+  renderCompartmentRows();
+}));
+els.compartmentRows.addEventListener("click", async event => {
+  const row = event.target.closest("[data-id]");
+  if (!row) return;
+  const id = row.dataset.id;
+  if (event.target.classList.contains("rename-compartment")) {
+    try {
+      await api.renameCompartment(id, row.querySelector(".compartment-name-input").value);
+      await refreshCompartments();
+      renderCompartmentRows();
+      toast("Compartment renamed");
+    } catch (error) { adminFailure(error, "Rename failed"); }
+  } else if (event.target.classList.contains("export-compartment")) {
+    await downloadCompartment(id);
+  } else if (event.target.classList.contains("delete-compartment")) {
+    activeDeleteCompartmentId = id;
+    const compartment = compartments.find(item => item.id === id);
+    els.deleteCompartmentLabel.textContent = compartment.name;
+    els.deleteCompartmentName.value = "";
+    els.deleteCompartmentDialog.showModal();
+  }
+});
+els.confirmCompartmentDelete.addEventListener("click", async () => {
+  const compartment = compartments.find(item => item.id === activeDeleteCompartmentId);
+  if (!compartment || els.deleteCompartmentName.value !== compartment.name) return toast("Type the exact compartment name");
+  els.confirmCompartmentDelete.disabled = true;
+  try {
+    await api.deleteCompartment(compartment.id, els.deleteCompartmentName.value);
+    if (activeCompartmentId === compartment.id) activeCompartmentId = "";
+    els.deleteCompartmentDialog.close();
+    els.compartmentDialog.close();
+    await loadAll();
+    toast("Compartment and its leads deleted");
+  } catch (error) { adminFailure(error, "Deletion failed; retry to continue"); }
+  finally { els.confirmCompartmentDelete.disabled = false; }
+});
+
+els.moveSelected.addEventListener("click", async () => {
+  const leadIds = selection.ids();
+  const compartmentId = els.moveDestination.value;
+  if (!leadIds.length || !compartmentId) return;
+  els.moveSelected.disabled = true;
+  try {
+    const result = await api.moveLeads(leadIds, compartmentId);
+    [...result.moved, ...result.unchanged].forEach(record => state.upsertLead(record));
+    const failed = new Set(result.errors.map(error => String(error.id)));
+    selection.clear();
+    applyFilters();
+    const visibleIds = filtered.map(item => String(item.id));
+    for (const id of failed) {
+      const index = visibleIds.indexOf(id);
+      if (index >= 0) selection.toggle(id, index, false, visibleIds);
+    }
+    render();
+    toast(result.errors.length ? `${result.moved.length} moved; ${result.errors.length} failed` : `${result.moved.length} lead(s) moved`);
+  } catch (error) { adminFailure(error, "Move failed"); }
+  finally { els.moveSelected.disabled = false; }
+});
+els.clearSelection.addEventListener("click", () => { selection.clear(); render(); });
+
 els.editForm.addEventListener("submit", async event => {
   event.preventDefault();
   try {
     const record = await api.updateLead(activeEditId, {
-      name: els.editName.value, mobile: els.editMobile.value,
-      address: els.editAddress.value, category: els.editCategory.value
+      name: els.editName.value,
+      mobile: els.editMobile.value,
+      address: els.editAddress.value,
+      city: els.editCity.value,
+      category: els.editCategory.value
     });
     state.upsertLead(record);
     els.editDialog.close();
-    applyFilters(false);
+    applyFilters({ resetLimit: false });
     toast("Lead details updated");
   } catch (error) { adminFailure(error, "Edit failed"); }
 });
@@ -299,7 +519,7 @@ els.confirmDelete.addEventListener("click", async () => {
     await api.deleteLead(activeDeleteId);
     state.removeLead(activeDeleteId);
     els.deleteDialog.close();
-    applyFilters(false);
+    applyFilters({ resetLimit: false });
     toast("Lead deleted");
   } catch (error) { adminFailure(error, "Delete failed"); }
   finally { els.confirmDelete.disabled = false; }
@@ -308,23 +528,29 @@ els.downloadBackup.addEventListener("click", async () => {
   try {
     const { blob, filename } = await api.downloadBackup();
     const url = URL.createObjectURL(blob);
-    const anchor = Object.assign(document.createElement("a"), { href: url, download: filename });
-    anchor.click();
+    Object.assign(document.createElement("a"), { href: url, download: filename }).click();
     URL.revokeObjectURL(url);
   } catch (error) { adminFailure(error, "Backup failed"); }
 });
 
 const savedTemplate = localStorage.getItem("telecaller_wa_template");
 els.waTemplate.value = savedTemplate || DEFAULT_WA;
-els.waTemplate.addEventListener("change", () => { localStorage.setItem("telecaller_wa_template", els.waTemplate.value); toast("WhatsApp message saved"); applyFilters(false); });
-els.search.addEventListener("input", () => applyFilters(true));
-els.statusFilter.addEventListener("change", () => applyFilters(true));
-els.areaSort.addEventListener("change", () => applyFilters(true));
+els.waTemplate.addEventListener("change", () => {
+  localStorage.setItem("telecaller_wa_template", els.waTemplate.value);
+  toast("WhatsApp message saved");
+  applyFilters({ resetLimit: false });
+});
+els.search.addEventListener("input", () => applyFilters({ clearSelection: true }));
+els.statusFilter.addEventListener("change", () => applyFilters({ clearSelection: true }));
+els.areaSort.addEventListener("change", () => applyFilters({ clearSelection: true }));
 els.clearFilters.addEventListener("click", () => {
   els.search.value = "";
   els.statusFilter.value = "";
   els.areaSort.value = "";
-  applyFilters(true);
+  activeCompartmentId = "";
+  selectedCities = new Set();
+  selectedCategories = new Set();
+  applyFilters({ clearSelection: true });
 });
 els.loadMore.addEventListener("click", () => { renderLimit += PAGE_SIZE; render(); });
 els.jumpTop.addEventListener("click", () => window.scrollTo({ top: 0, behavior: "smooth" }));
@@ -333,7 +559,7 @@ document.querySelectorAll("[data-close-dialog]").forEach(button => button.addEve
 
 async function initialize() {
   setAdminMode(false);
-  const [, authenticated] = await Promise.all([loadLeads(), api.session().catch(() => false)]);
+  const [, authenticated] = await Promise.all([loadAll(), api.session().catch(() => false)]);
   setAdminMode(authenticated);
 }
 

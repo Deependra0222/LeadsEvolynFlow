@@ -32,6 +32,20 @@ test("viewer can combine area sorting with the existing search and status filter
   assert.match(html, /value="area-desc"/);
 });
 
+test("page exposes the neobrutalist visual system without hiding focus indicators", async () => {
+  const html = await read("../index.html");
+  assert.match(html, /--ink:\s*#111111/i);
+  assert.match(html, /--hard-shadow:/i);
+  assert.match(html, /border:\s*3px solid var\(--ink\)/i);
+  assert.match(html, /:focus-visible\s*\{[^}]*outline:\s*3px solid var\(--ink\)/i);
+  assert.match(html, /:focus-visible\s*\{[^}]*box-shadow:\s*0 0 0 6px var\(--yellow\)/i);
+});
+
+test("phone layout releases the tall filter header while scrolling", async () => {
+  const html = await read("../index.html");
+  assert.match(html, /@media\s*\(max-width:520px\)\s*\{[\s\S]*?\.topbar\s*\{\s*position:\s*static\s*\}/i);
+});
+
 test("viewer loads server-owned leads and PATCHes changed workflow fields", async () => {
   const app = await read("../app.mjs");
   assert.match(app, /api\.listLeads\(\)/);
@@ -86,6 +100,32 @@ test("app toggles admin mode and supports import, edit, delete, and backup", asy
   assert.match(app, /class="admin-only delete-lead"/);
 });
 
+test("page exposes compartment navigation multi-select filters and bulk move controls", async () => {
+  const html = await read("../index.html");
+  const app = await read("../app.mjs");
+  for (const id of [
+    "compartmentNav", "filterToggle", "filterPanel", "cityFilters", "categoryFilters",
+    "activeFilters", "manageCompartments", "importCompartment", "bulkMoveBar", "moveDestination"
+  ]) assert.match(html, new RegExp(`id="${id}"`));
+  assert.match(app, /api\.listCompartments/);
+  assert.match(app, /api\.moveLeads/);
+  assert.match(app, /api\.downloadCompartment/);
+  assert.match(app, /shiftKey/);
+  assert.match(app, /buildLeadFacets/);
+  assert.match(html, /body\s+\.bulk-move-bar\[hidden\]\s*\{\s*display:\s*none!important/i);
+});
+
+test("admin dialogs include compartment management destination binding and City editing", async () => {
+  const html = await read("../index.html");
+  for (const id of [
+    "compartmentDialog", "newCompartmentName", "createCompartment", "compartmentRows",
+    "deleteCompartmentDialog", "deleteCompartmentName", "confirmCompartmentDelete", "editCity"
+  ]) assert.match(html, new RegExp(`id="${id}"`));
+  assert.match(html, /for="importCompartment"/);
+  assert.match(html, /for="editCity"/);
+  assert.match(html, /aria-live="polite"/);
+});
+
 test("WhatsApp template remains a browser-local preference", async () => {
   const app = await read("../app.mjs");
   assert.match(app, /telecaller_wa_template/);
@@ -98,6 +138,7 @@ test("Netlify publishes the site, packages seed JSON, and routes both API groups
   assert.match(config, /included_files\s*=\s*\["netlify\/data\/initial-leads\.json"\]/);
   assert.match(config, /from\s*=\s*"\/api\/admin\/\*"[\s\S]*?lead-data\/admin\/:splat/);
   assert.match(config, /from\s*=\s*"\/api\/leads\/\*"[\s\S]*?lead-data\/:splat/);
+  assert.match(config, /from\s*=\s*"\/api\/compartments"[\s\S]*?lead-data\/compartments/);
 });
 
 test("deployment documentation covers secrets, permissions, JSON, backup, and refresh", async () => {

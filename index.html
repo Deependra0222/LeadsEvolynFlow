@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="theme-color" content="#0b2f59">
+<meta name="theme-color" content="#3157f6">
 <title>Telecallers Lead</title>
 <style>
   :root{
@@ -350,6 +350,395 @@
   @media (prefers-reduced-motion:reduce){
     *{scroll-behavior:auto!important;transition:none!important}
   }
+
+  /* Neobrutalist visual system */
+  :root{
+    --ink:#111111;
+    --paper:#fff8e7;
+    --white:#ffffff;
+    --blue:#3157f6;
+    --blue2:#3157f6;
+    --navy:#111111;
+    --yellow:#ffdc43;
+    --coral:#ff6b5e;
+    --green:#35d07f;
+    --pale:#fff0a8;
+    --pale2:#ffffff;
+    --line:#111111;
+    --text:#111111;
+    --muted:#454545;
+    --danger:#bd2017;
+    --bg:#fff8e7;
+    --shadow:var(--hard-shadow);
+    --hard-shadow:6px 6px 0 var(--ink);
+    --hard-shadow-sm:3px 3px 0 var(--ink);
+  }
+
+  body{
+    min-height:100vh;
+    background-color:var(--paper);
+    background-image:
+      linear-gradient(rgba(17,17,17,.045) 1px,transparent 1px),
+      linear-gradient(90deg,rgba(17,17,17,.045) 1px,transparent 1px);
+    background-size:24px 24px;
+    color:var(--ink);
+    font-family:Arial,"Arial Black",Inter,system-ui,sans-serif;
+  }
+
+  ::selection{background:var(--yellow);color:var(--ink)}
+  button,input,select,textarea{font:inherit}
+  button,a,select,summary{touch-action:manipulation}
+  button{cursor:pointer}
+  button:active,.action:active{box-shadow:none!important;transform:translate(3px,3px)!important}
+  :focus-visible{
+    outline:3px solid var(--ink)!important;
+    outline-offset:3px!important;
+    box-shadow:0 0 0 6px var(--yellow)!important;
+  }
+
+  .topbar{
+    padding:16px 14px 18px;
+    color:var(--white);
+    background:var(--blue);
+    border-bottom:3px solid var(--ink);
+    box-shadow:none;
+  }
+  .top-inner{max-width:960px}
+  .title-row{gap:14px;align-items:center}
+  h1{
+    font-family:"Arial Black",Arial,sans-serif;
+    font-size:clamp(20px,4vw,30px);
+    letter-spacing:-.7px;
+    line-height:1;
+    text-transform:uppercase;
+    text-shadow:3px 3px 0 var(--ink);
+  }
+  .title-actions{gap:10px}
+  .count-pill{
+    padding:7px 11px;
+    color:var(--ink);
+    background:var(--yellow);
+    border:3px solid var(--ink);
+    border-radius:999px;
+    box-shadow:var(--hard-shadow-sm);
+    font-size:12px;
+    font-weight:900;
+  }
+  .header-btn,.admin-btn,.dialog-btn{
+    padding:8px 12px;
+    color:var(--ink);
+    background:var(--white);
+    border:3px solid var(--ink);
+    border-radius:7px;
+    box-shadow:var(--hard-shadow-sm);
+    font-weight:900;
+    transition:transform .12s ease,box-shadow .12s ease;
+  }
+  .header-btn:hover,.admin-btn:hover,.dialog-btn:hover,.clear-btn:hover,.load-more:hover,.update-btn:hover,.action:hover{
+    transform:translate(-1px,-1px);
+    box-shadow:7px 7px 0 var(--ink);
+  }
+
+  .controls{margin-top:16px;gap:12px}
+  .search{
+    min-height:50px;
+    padding:12px 14px 12px 44px;
+    color:var(--ink);
+    background:var(--white);
+    border:3px solid var(--ink);
+    border-radius:8px;
+    box-shadow:var(--hard-shadow-sm);
+    font-weight:700;
+  }
+  .search::placeholder{color:#676767;opacity:1}
+  .search-icon{left:15px;color:var(--ink);font-size:21px;font-weight:900;opacity:1}
+  .filter-row{grid-template-columns:1fr 1fr;gap:10px}
+  .filter{
+    min-height:48px;
+    padding:9px 12px;
+    color:var(--ink);
+    background:var(--yellow);
+    border:3px solid var(--ink);
+    border-radius:8px;
+    box-shadow:var(--hard-shadow-sm);
+    font-weight:900;
+  }
+  .sort-filter{background:#a8f0ff}
+  .clear-btn{
+    grid-column:1/-1;
+    min-height:46px;
+    padding:8px 15px;
+    color:var(--ink);
+    background:var(--coral);
+    border:3px solid var(--ink);
+    border-radius:8px;
+    box-shadow:var(--hard-shadow-sm);
+    font-weight:900;
+    transition:transform .12s ease,box-shadow .12s ease;
+  }
+
+  main{max-width:960px;padding:22px 14px 100px}
+  details.settings{
+    margin:0 0 20px;
+    background:var(--white);
+    border:3px solid var(--ink);
+    border-radius:8px;
+    box-shadow:var(--hard-shadow);
+  }
+  details.settings summary{
+    padding:14px 16px;
+    color:var(--ink);
+    background:var(--yellow);
+    border-bottom:0 solid var(--ink);
+    font-family:"Arial Black",Arial,sans-serif;
+    font-weight:900;
+  }
+  details.settings[open] summary{border-bottom-width:3px}
+  details.settings summary::after{content:"＋";float:right;font-weight:900}
+  details.settings[open] summary::after{content:"−"}
+  .settings-body{padding:15px 16px 16px}
+  .settings-body label,.dialog-card label{color:var(--ink);font-weight:900}
+  .settings-body textarea,.dialog-card input,.dialog-card textarea{
+    color:var(--ink);
+    background:var(--paper);
+    border:2px solid var(--ink);
+    border-radius:5px;
+  }
+  .helper{color:var(--muted);font-weight:700}
+
+  .admin-toolbar{gap:11px;margin:0 0 20px}
+  .admin-toolbar .admin-btn{color:var(--ink);background:var(--green);border-color:var(--ink)}
+  .admin-toolbar .admin-btn:nth-child(2){background:var(--yellow)}
+  .summary-line{
+    gap:10px;
+    margin:0 0 14px;
+    padding:10px 12px;
+    color:var(--white);
+    background:var(--ink);
+    border:3px solid var(--ink);
+    border-radius:6px;
+    font-weight:900;
+  }
+  .sync-notice{
+    margin:0 0 18px;
+    padding:11px 13px;
+    color:var(--ink);
+    background:#a8f0ff;
+    border:3px solid var(--ink);
+    border-radius:6px;
+    box-shadow:var(--hard-shadow-sm);
+    font-weight:900;
+  }
+  .sync-notice.success{color:var(--ink);background:#baf5d3;border-color:var(--ink)}
+  .sync-notice.warning{color:var(--ink);background:#ffd0cb;border-color:var(--ink)}
+
+  .lead-list{gap:20px}
+  .card{
+    background:var(--white);
+    border:3px solid var(--ink);
+    border-radius:9px;
+    box-shadow:var(--hard-shadow);
+  }
+  .card-head{
+    padding:14px 15px;
+    background:#a8f0ff;
+    border-bottom:3px solid var(--ink);
+  }
+  .card:nth-child(3n+2) .card-head{background:var(--yellow)}
+  .card:nth-child(3n+3) .card-head{background:#ffd0cb}
+  .sno{
+    display:inline-block;
+    margin-bottom:7px;
+    padding:4px 7px;
+    color:var(--white);
+    background:var(--ink);
+    border:2px solid var(--ink);
+    border-radius:4px;
+    font-size:11px;
+    font-weight:900;
+    letter-spacing:.7px;
+  }
+  .biz{color:var(--ink);font-family:"Arial Black",Arial,sans-serif;font-size:18px;font-weight:900}
+  .phone{
+    margin-top:9px;
+    color:var(--ink);
+    text-decoration:underline;
+    text-decoration-thickness:3px;
+    text-underline-offset:3px;
+  }
+  .card-body{padding:15px}
+  .meta{gap:9px}
+  .meta-row{
+    grid-template-columns:105px 1fr;
+    gap:10px;
+    padding:9px 10px;
+    background:var(--paper);
+    border:2px solid var(--ink);
+    border-radius:5px;
+  }
+  .label{color:var(--ink);font-size:11px;font-weight:900;text-transform:uppercase;letter-spacing:.3px}
+  .value{color:var(--ink);font-size:13px;font-weight:650}
+
+  .actions{gap:11px;margin-top:14px}
+  .action{
+    min-height:49px;
+    color:var(--ink);
+    border:3px solid var(--ink);
+    border-radius:7px;
+    box-shadow:var(--hard-shadow-sm);
+    font-weight:900;
+    transition:transform .12s ease,box-shadow .12s ease;
+  }
+  .call{color:var(--white);background:var(--blue)}
+  .wa{background:var(--green)}
+  .work-grid{gap:11px;margin-top:17px;padding-top:16px;border-top:3px dashed var(--ink)}
+  .field label{color:var(--ink);font-weight:900;letter-spacing:.6px}
+  .field select,.field input,.field textarea{
+    color:var(--ink);
+    background:var(--paper);
+    border:2px solid var(--ink);
+    border-radius:5px;
+    font-weight:700;
+  }
+  .field select:focus,.field input:focus,.field textarea:focus,.settings-body textarea:focus{
+    border-color:var(--ink);
+    box-shadow:3px 3px 0 var(--blue);
+  }
+  .update-btn{
+    min-height:49px;
+    margin-top:14px;
+    color:var(--white);
+    background:var(--blue);
+    border:3px solid var(--ink);
+    border-radius:7px;
+    box-shadow:var(--hard-shadow-sm);
+    font-weight:900;
+    transition:transform .12s ease,box-shadow .12s ease;
+  }
+  .update-btn.saved{color:var(--ink);background:var(--green)}
+  .update-btn:disabled{cursor:wait;filter:grayscale(.25);opacity:.72}
+  .admin-actions{gap:10px;margin-top:11px}
+  .edit-lead,.delete-lead{
+    padding:10px;
+    color:var(--ink);
+    background:var(--yellow);
+    border:2px solid var(--ink);
+    border-radius:5px;
+    box-shadow:2px 2px 0 var(--ink);
+    font-weight:900;
+  }
+  .delete-lead{color:var(--ink);background:#ffd0cb;border-color:var(--ink)}
+
+  .load-more{
+    min-height:51px;
+    margin-top:22px;
+    color:var(--ink);
+    background:var(--yellow);
+    border:3px solid var(--ink);
+    border-radius:7px;
+    box-shadow:var(--hard-shadow);
+    font-weight:900;
+    transition:transform .12s ease,box-shadow .12s ease;
+  }
+  .empty{
+    padding:38px 18px;
+    color:var(--ink);
+    background:var(--white);
+    border:3px solid var(--ink);
+    border-radius:8px;
+    box-shadow:var(--hard-shadow);
+    font-weight:800;
+  }
+  .jump-top{
+    width:48px;height:48px;
+    color:var(--ink);
+    background:var(--yellow);
+    border:3px solid var(--ink);
+    border-radius:8px;
+    box-shadow:var(--hard-shadow-sm);
+  }
+  .toast{
+    padding:11px 14px;
+    color:var(--white);
+    background:var(--ink);
+    border:3px solid var(--yellow);
+    border-radius:5px;
+    box-shadow:var(--hard-shadow-sm);
+    font-weight:900;
+  }
+
+  dialog{
+    width:min(650px,calc(100% - 28px));
+    padding:0;
+    background:var(--white);
+    border:3px solid var(--ink);
+    border-radius:9px;
+    box-shadow:10px 10px 0 var(--ink);
+  }
+  dialog::backdrop{background:rgba(49,87,246,.42);backdrop-filter:blur(2px)}
+  .dialog-card{padding:20px;background:var(--white)}
+  .dialog-card h2{
+    margin:0 -20px 17px;
+    padding:13px 20px;
+    color:var(--ink);
+    background:var(--yellow);
+    border-bottom:3px solid var(--ink);
+    font-family:"Arial Black",Arial,sans-serif;
+    font-size:21px;
+  }
+  .dialog-btn{background:var(--blue);color:var(--white);border-color:var(--ink)}
+  .dialog-btn.secondary{color:var(--ink);background:var(--white);border-color:var(--ink)}
+  .dialog-btn.danger{color:var(--ink);background:var(--coral);border-color:var(--ink)}
+  .error-text{color:var(--danger);font-weight:900}
+  .table-wrap{border:2px solid var(--ink);border-radius:5px}
+  th,td{padding:8px;border-bottom:2px solid var(--ink)}
+  th{color:var(--ink);background:var(--yellow)}
+
+  @media (min-width:760px){
+    .controls{grid-template-columns:minmax(280px,1fr) minmax(460px,1.25fr);align-items:start}
+    .filter-row{grid-template-columns:1fr 1fr auto}
+    .clear-btn{grid-column:auto}
+    main{padding:25px 16px 110px}
+    .work-grid{grid-template-columns:1fr 1fr}
+    .work-grid .remarks-field{grid-column:1/-1}
+  }
+
+  @media (max-width:520px){
+    .topbar{position:static}
+    .title-row{align-items:flex-start}
+    .title-actions{max-width:170px}
+    .header-btn{padding:7px 9px}
+    .filter-row{grid-template-columns:1fr}
+    .clear-btn{grid-column:auto}
+    .summary-line{align-items:flex-start;flex-direction:column}
+    .meta-row{grid-template-columns:1fr;gap:3px}
+    .actions{grid-template-columns:1fr}
+  }
+
+  .compartment-nav{display:flex;gap:10px;overflow-x:auto;padding:3px 3px 12px;scrollbar-width:thin}
+  .compartment-tab{flex:0 0 auto;padding:9px 13px;background:var(--white);border:3px solid var(--ink);border-radius:999px;box-shadow:var(--hard-shadow-sm);font-weight:900}
+  .compartment-tab.active{background:var(--yellow);transform:translate(2px,2px);box-shadow:1px 1px 0 var(--ink)}
+  .filter-toggle{display:none;width:100%;margin:0 0 10px;padding:10px;background:#a8f0ff;border:3px solid var(--ink);border-radius:7px;box-shadow:var(--hard-shadow-sm);font-weight:900}
+  .facet-panel{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:0 0 18px;padding:14px;background:var(--white);border:3px solid var(--ink);border-radius:8px;box-shadow:var(--hard-shadow)}
+  .facet-group{min-width:0}.facet-group h2{margin:0 0 9px;font-size:13px;text-transform:uppercase}
+  .facet-options{display:flex;flex-wrap:wrap;gap:8px;max-height:150px;overflow:auto}
+  .facet-option{display:flex;align-items:center;gap:6px;padding:6px 8px;background:var(--paper);border:2px solid var(--ink);border-radius:5px;font-size:12px;font-weight:800}
+  .facet-option input{width:17px;height:17px;accent-color:var(--blue)}
+  .active-filters{grid-column:1/-1;display:flex;gap:7px;flex-wrap:wrap;min-height:1px}
+  .filter-chip,.compartment-badge{display:inline-flex;padding:4px 7px;background:var(--yellow);border:2px solid var(--ink);border-radius:4px;font-size:11px;font-weight:900}
+  .card-select{display:none;align-items:center;gap:8px;margin-bottom:9px;font-weight:900}
+  body[data-admin="true"] .card-select{display:flex}
+  .card-select input{width:20px;height:20px;accent-color:var(--blue)}
+  .bulk-move-bar{position:sticky;bottom:12px;z-index:18;display:flex;align-items:center;gap:9px;margin:12px 0;padding:11px;background:var(--yellow);border:3px solid var(--ink);border-radius:8px;box-shadow:var(--hard-shadow)}
+  body .bulk-move-bar[hidden]{display:none!important}.bulk-move-bar strong{margin-right:auto}.bulk-move-bar select{min-width:160px;padding:8px;border:2px solid var(--ink);border-radius:5px;background:var(--white);font-weight:800}
+  .compartment-rows{display:grid;gap:10px;margin-top:14px}.compartment-row{display:grid;grid-template-columns:minmax(140px,1fr) auto auto auto;gap:8px;align-items:center;padding:10px;background:var(--paper);border:2px solid var(--ink);border-radius:6px}
+  .compartment-row input{margin:0!important}.mini-btn{padding:7px 9px;background:var(--white);border:2px solid var(--ink);border-radius:4px;font-weight:900}.mini-btn.danger{background:#ffd0cb}
+  .inline-create{display:grid;grid-template-columns:1fr auto;gap:8px;align-items:end}.dialog-card select{width:100%;padding:10px 11px;background:var(--paper);border:2px solid var(--ink);border-radius:5px}
+  .dialog-note{padding:9px;background:#ffd0cb;border:2px solid var(--ink);font-weight:800}.destination-note{margin:8px 0;font-weight:900}
+
+  @media (max-width:620px){
+    .filter-toggle{display:block}.facet-panel{display:none;grid-template-columns:1fr}.facet-panel.open{display:grid}.active-filters{grid-column:1}.compartment-row{grid-template-columns:1fr 1fr}.compartment-row input{grid-column:1/-1}.bulk-move-bar{flex-wrap:wrap}.bulk-move-bar strong{width:100%}.bulk-move-bar select{flex:1;min-width:0}
+  }
 </style>
 </head>
 <body>
@@ -390,6 +779,14 @@
 </header>
 
 <main>
+  <nav id="compartmentNav" class="compartment-nav" aria-label="Lead compartments"></nav>
+  <button id="filterToggle" class="filter-toggle" type="button" aria-expanded="false" aria-controls="filterPanel">City &amp; Category Filters</button>
+  <section id="filterPanel" class="facet-panel" aria-label="Lead filters">
+    <div class="facet-group"><h2>City / Area</h2><div id="cityFilters" class="facet-options"></div></div>
+    <div class="facet-group"><h2>Category</h2><div id="categoryFilters" class="facet-options"></div></div>
+    <div id="activeFilters" class="active-filters" aria-live="polite"></div>
+  </section>
+
   <details class="settings">
     <summary>WhatsApp Message Settings</summary>
     <div class="settings-body">
@@ -401,6 +798,7 @@
 
   <div class="admin-toolbar admin-only" aria-label="Admin lead controls">
     <button id="importLeads" class="admin-btn" type="button">Import Leads</button>
+    <button id="manageCompartments" class="admin-btn" type="button">Manage Compartments</button>
     <button id="downloadBackup" class="admin-btn" type="button">Download JSON Backup</button>
   </div>
 
@@ -410,6 +808,12 @@
   </div>
 
   <div id="syncNotice" class="sync-notice" role="status" aria-live="polite">Loading shared updates...</div>
+  <div id="bulkMoveBar" class="bulk-move-bar admin-only" role="status" aria-live="polite" hidden>
+    <strong id="selectedCount">0 selected</strong>
+    <select id="moveDestination" aria-label="Move selected leads to compartment"></select>
+    <button id="moveSelected" class="mini-btn" type="button">Move</button>
+    <button id="clearSelection" class="mini-btn" type="button">Clear</button>
+  </div>
   <section id="leadList" class="lead-list" aria-live="polite"></section>
   <button id="loadMore" class="load-more" type="button">Load more leads</button>
 </main>
@@ -433,6 +837,12 @@
 <dialog id="importDialog" aria-labelledby="importTitle">
   <div class="dialog-card">
     <h2 id="importTitle">Import Leads from JSON</h2>
+    <label for="importCompartment">Destination compartment</label>
+    <select id="importCompartment" required></select>
+    <div class="inline-create">
+      <div><label for="importNewCompartment">Or create a new compartment</label><input id="importNewCompartment" maxlength="80"></div>
+      <button id="createImportCompartment" class="mini-btn" type="button">Create</button>
+    </div>
     <label for="jsonFile">Upload a JSON file</label>
     <input id="jsonFile" type="file" accept="application/json,.json">
     <label for="jsonText">Or paste one lead object or an array</label>
@@ -455,6 +865,7 @@
       <div><label for="editName">Name</label><input id="editName" maxlength="300" required></div>
       <div><label for="editMobile">Mobile</label><input id="editMobile" maxlength="50" required></div>
       <div><label for="editAddress">Address</label><input id="editAddress" maxlength="500"></div>
+      <div><label for="editCity">City / Area</label><input id="editCity" maxlength="120" required></div>
       <div><label for="editCategory">Category</label><input id="editCategory" maxlength="120"></div>
     </div>
     <div class="dialog-actions">
@@ -462,6 +873,32 @@
       <button class="dialog-btn" type="submit">Save Details</button>
     </div>
   </form>
+</dialog>
+
+<dialog id="compartmentDialog" aria-labelledby="compartmentTitle">
+  <div class="dialog-card">
+    <h2 id="compartmentTitle">Manage Compartments</h2>
+    <div class="inline-create">
+      <div><label for="newCompartmentName">New compartment name</label><input id="newCompartmentName" maxlength="80"></div>
+      <button id="createCompartment" class="mini-btn" type="button">Create</button>
+    </div>
+    <div id="compartmentRows" class="compartment-rows"></div>
+    <div class="dialog-actions"><button class="dialog-btn secondary" type="button" data-close-dialog>Close</button></div>
+  </div>
+</dialog>
+
+<dialog id="deleteCompartmentDialog" aria-labelledby="deleteCompartmentTitle">
+  <div class="dialog-card">
+    <h2 id="deleteCompartmentTitle">Delete Compartment</h2>
+    <p class="dialog-note">This permanently deletes this compartment and every lead currently inside it. Download its JSON first if you need a copy.</p>
+    <p>Type <strong id="deleteCompartmentLabel"></strong> exactly to continue.</p>
+    <label for="deleteCompartmentName">Compartment name</label>
+    <input id="deleteCompartmentName" autocomplete="off">
+    <div class="dialog-actions">
+      <button class="dialog-btn secondary" type="button" data-close-dialog>Cancel</button>
+      <button id="confirmCompartmentDelete" class="dialog-btn danger" type="button">Delete Compartment &amp; Leads</button>
+    </div>
+  </div>
 </dialog>
 
 <dialog id="deleteDialog" aria-labelledby="deleteTitle">

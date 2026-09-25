@@ -19,3 +19,8 @@
   from = "/api/leads/*"
   to = "/.netlify/functions/lead-data/:splat"
   status = 200
+
+[[redirects]]
+  from = "/api/compartments"
+  to = "/.netlify/functions/lead-data/compartments"
+  status = 200
