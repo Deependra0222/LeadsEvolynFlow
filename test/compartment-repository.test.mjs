@@ -64,3 +64,12 @@ test("deletion markers can be resumed and cleared", async () => {
   assert.equal(await repository.isDeleting(compartment.id), false);
   assert.equal(await repository.get(compartment.id), null);
 });
+
+test("a deleting compartment rejects new writes", async () => {
+  const repository = makeRepository();
+  const compartment = await repository.create("Temporary");
+  await repository.assertWritable(compartment.id);
+  await repository.beginDelete(compartment.id);
+  await assert.rejects(() => repository.assertWritable(compartment.id), /deleting/i);
+  await assert.rejects(() => repository.assertWritable("missing"), /not found/i);
+});

@@ -14,8 +14,8 @@ const seedLeads = JSON.parse(
   await readFile(new URL("../data/initial-leads.json", import.meta.url), "utf8")
 );
 const store = getStore({ name: "telecaller-leads", consistency: "strong" });
-const repository = createLeadRepository({ store, seedLeads, makeId: randomUUID });
 const compartmentRepository = createCompartmentRepository({ store, makeId: randomUUID });
+const repository = createLeadRepository({ store, seedLeads, makeId: randomUUID, compartmentRepository });
 const auth = createAdminAuth({
   password: env("LEAD_ADMIN_PASSWORD"),
   secret: env("LEAD_SESSION_SECRET")

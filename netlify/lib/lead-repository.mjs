@@ -28,6 +28,26 @@ async function mapWithConcurrency(items, limit, operation) {
   return results;
 }
 
+async function collectWithConcurrency(items, limit, operation) {
+  if (!items.length) return [];
+  const results = new Array(items.length);
+  let nextIndex = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (true) {
+      const index = nextIndex;
+      nextIndex += 1;
+      if (index >= items.length) return;
+      try {
+        results[index] = { ok: true, value: await operation(items[index], index) };
+      } catch (error) {
+        results[index] = { ok: false, error };
+      }
+    }
+  });
+  await Promise.all(workers);
+  return results;
+}
+
 async function retryRead(operation, attempts = 3) {
   let lastError;
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
@@ -54,6 +74,7 @@ export function createLeadRepository({
   seedLeads = [],
   now = () => new Date().toISOString(),
   makeId = () => crypto.randomUUID(),
+  compartmentRepository = null,
   readConcurrency = 32,
   migrationConcurrency = 16
 }) {
@@ -122,7 +143,9 @@ export function createLeadRepository({
       if (!current) return null;
       const normalized = normalizeStoredLead(current.data);
       if (!normalized) return null;
-      const next = normalizeStoredLead({ ...merge(normalized), id, updatedAt: now() });
+      const merged = merge(normalized);
+      if (merged === normalized) return normalized;
+      const next = normalizeStoredLead({ ...merged, id, updatedAt: now() });
       if (!next) throw new Error("The stored lead is invalid.");
       const write = await store.setJSON(key, next, { onlyIfMatch: current.etag });
       if (write.modified) return next;
@@ -158,6 +181,7 @@ export function createLeadRepository({
     if (!validateCompartmentIdentifier(compartmentId)) {
       return { imported: [], errors: records.map((_, index) => ({ index, field: "compartmentId", error: "Invalid destination compartment." })) };
     }
+    if (compartmentRepository) await compartmentRepository.assertWritable(compartmentId);
     const destinationRecords = records.map(input => ({
       ...input,
       city: typeof input.city === "string" && input.city.trim() ? input.city.trim() : deriveCity(input.address),
@@ -180,6 +204,7 @@ export function createLeadRepository({
       let releaseReservationOnFailure = false;
       let commitUncertain = false;
       try {
+        if (compartmentRepository) await compartmentRepository.assertWritable(compartmentId);
         if (preferredId) {
           const prior = importIndex.leadIds.has(preferredId) ? await get(preferredId) : null;
           if (prior) {
@@ -288,6 +313,68 @@ export function createLeadRepository({
     return record;
   }
 
+  async function moveMany(ids, compartmentId) {
+    if (!validateCompartmentIdentifier(compartmentId)) throw new Error("Invalid destination compartment.");
+    if (compartmentRepository) await compartmentRepository.assertWritable(compartmentId);
+    const uniqueIds = [...new Set(ids)];
+    const results = await collectWithConcurrency(uniqueIds, migrationLimit, async id => {
+      if (compartmentRepository) await compartmentRepository.assertWritable(compartmentId);
+      let unchanged = false;
+      const record = await updateWithRetry(id, current => {
+        unchanged = current.compartmentId === compartmentId;
+        return unchanged ? current : { ...current, compartmentId };
+      });
+      if (!record) return { id, missing: true };
+      return { record, unchanged };
+    });
+    const moved = [];
+    const unchanged = [];
+    const errors = [];
+    results.forEach((result, index) => {
+      const id = uniqueIds[index];
+      if (!result.ok) {
+        errors.push({ id, error: result.error?.code === "CONFLICT" ? result.error.message : "Could not move this lead." });
+      } else if (result.value.missing) {
+        errors.push({ id, error: "Lead not found." });
+      } else if (result.value.unchanged) {
+        unchanged.push(result.value.record);
+      } else {
+        moved.push(result.value.record);
+      }
+    });
+    return { moved, unchanged, errors };
+  }
+
+  async function exportCompartment(compartmentId) {
+    if (!validateCompartmentIdentifier(compartmentId)) throw new Error("Invalid compartment identifier.");
+    return (await list())
+      .filter(record => record.compartmentId === compartmentId)
+      .map(record => ({
+        "Institute/Business Name": record.name,
+        "Mobile Number": record.mobile,
+        "Area/Address": record.address,
+        "City": record.city,
+        "Category": record.category,
+        "Call Status": record.status,
+        "Next Follow-up": record.followup,
+        "Remarks": record.remarks
+      }));
+  }
+
+  async function removeByCompartment(compartmentId) {
+    if (!validateCompartmentIdentifier(compartmentId)) throw new Error("Invalid compartment identifier.");
+    const records = (await list()).filter(record => record.compartmentId === compartmentId);
+    const results = await collectWithConcurrency(records, migrationLimit, record => remove(record.id));
+    const deleted = [];
+    const errors = [];
+    results.forEach((result, index) => {
+      const record = records[index];
+      if (result.ok && result.value) deleted.push(result.value);
+      else if (!result.ok) errors.push({ id: record.id, error: "Could not delete this lead." });
+    });
+    return { deleted, errors };
+  }
+
   async function ensureSeedRecords(defaultCompartmentId) {
     if (await readBlob(V2_MARKER_KEY)) return;
     const existingKeys = await listKeys(LEAD_PREFIX);
@@ -377,6 +464,9 @@ export function createLeadRepository({
     getSerialReservation,
     patchWorkflow,
     importMany,
+    moveMany,
+    exportCompartment,
+    removeByCompartment,
     updateCore,
     remove,
     exportAll: list

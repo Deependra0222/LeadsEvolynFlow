@@ -528,3 +528,61 @@ test("import replay cannot silently change its destination compartment", async (
   assert.equal(retry.imported.length, 0);
   assert.match(retry.errors[0].error, /different lead data/i);
 });
+
+test("bulk move preserves a concurrent viewer workflow update", async () => {
+  const { repo, blob } = makeRepo();
+  blob.conflictOnce("lead/a", baseLead({ status: "Interested" }));
+
+  const result = await repo.moveMany(["a"], "new-room");
+
+  assert.equal(result.moved[0].compartmentId, "new-room");
+  assert.equal(result.moved[0].status, "Interested");
+  assert.deepEqual(result.unchanged, []);
+  assert.deepEqual(result.errors, []);
+});
+
+test("bulk move reports unchanged and missing leads separately", async () => {
+  const { repo } = makeRepo({ records: [baseLead({ compartmentId: "room-a" })] });
+  const result = await repo.moveMany(["a", "missing"], "room-a");
+  assert.deepEqual(result.unchanged.map(record => record.id), ["a"]);
+  assert.deepEqual(result.errors, [{ id: "missing", error: "Lead not found." }]);
+});
+
+test("compartment export is import-ready and omits internal identity", async () => {
+  const { repo } = makeRepo({ records: [baseLead({ compartmentId: "room-a", city: "Jaipur" })] });
+  const rows = await repo.exportCompartment("room-a");
+  assert.deepEqual(Object.keys(rows[0]), [
+    "Institute/Business Name", "Mobile Number", "Area/Address", "City", "Category",
+    "Call Status", "Next Follow-up", "Remarks"
+  ]);
+  assert.equal(rows[0].City, "Jaipur");
+  assert.equal(rows[0]["Call Status"], "Called");
+  assert.equal("id" in rows[0], false);
+});
+
+test("failed compartment deletion reports row errors and a retry resumes", async () => {
+  const store = createBlobFake({
+    "lead/a": baseLead({ id: "a", sno: 1, compartmentId: "room-a" }),
+    "lead/b": baseLead({ id: "b", sno: 2, compartmentId: "room-a" }),
+    "lead/c": baseLead({ id: "c", sno: 3, compartmentId: "room-b" })
+  });
+  const remove = store.delete.bind(store);
+  let failOnce = true;
+  store.delete = async key => {
+    if (key === "lead/b" && failOnce) {
+      failOnce = false;
+      throw new Error("temporary delete failure");
+    }
+    return remove(key);
+  };
+  const { repo } = makeRepo({ records: [], store });
+
+  const first = await repo.removeByCompartment("room-a");
+  const retry = await repo.removeByCompartment("room-a");
+
+  assert.deepEqual(first.deleted.map(record => record.id), ["a"]);
+  assert.deepEqual(first.errors, [{ id: "b", error: "Could not delete this lead." }]);
+  assert.deepEqual(retry.deleted.map(record => record.id), ["b"]);
+  assert.deepEqual(retry.errors, []);
+  assert.deepEqual((await repo.list()).map(record => record.id), ["c"]);
+});

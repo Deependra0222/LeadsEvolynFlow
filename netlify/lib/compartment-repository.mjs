@@ -117,6 +117,21 @@ export function createCompartmentRepository({
     return Boolean(await store.get(`${DELETE_PREFIX}${id}`, { type: "json" }));
   }
 
+  async function assertWritable(id) {
+    const compartment = await get(id);
+    if (!compartment) {
+      const error = new Error("Compartment not found.");
+      error.code = "NOT_FOUND";
+      throw error;
+    }
+    if (await isDeleting(id)) {
+      const error = new Error("This compartment is currently deleting.");
+      error.code = "CONFLICT";
+      throw error;
+    }
+    return compartment;
+  }
+
   async function finishDelete(id) {
     const compartment = await get(id);
     if (compartment) {
@@ -127,5 +142,5 @@ export function createCompartmentRepository({
     await store.delete(`${DELETE_PREFIX}${id}`);
   }
 
-  return { ensureExistingLeads, list, get, create, rename, beginDelete, finishDelete, isDeleting };
+  return { ensureExistingLeads, list, get, create, rename, beginDelete, finishDelete, isDeleting, assertWritable };
 }
