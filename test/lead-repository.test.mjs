@@ -49,18 +49,37 @@ function createBlobFake(initial = {}) {
   };
 }
 
-function makeRepo({ records = [baseLead()], seedLeads = [], ids = ["new-a", "new-b"], store } = {}) {
+function makeRepo({ records = [baseLead()], seedLeads = [], ids = ["new-a", "new-b"], store, repositoryOptions = {} } = {}) {
   const blob = store || createBlobFake(Object.fromEntries(records.map(record => [`lead/${record.id}`, record])));
   let idIndex = 0;
   return {
     blob,
-    repo: createLeadRepository({ store: blob, seedLeads, now: () => NOW, makeId: () => ids[idIndex++] })
+    repo: createLeadRepository({ store: blob, seedLeads, now: () => NOW, makeId: () => ids[idIndex++], ...repositoryOptions })
   };
 }
 
 test("list returns normalized records sorted by serial", async () => {
   const { repo } = makeRepo({ records: [baseLead({ id: "b", sno: 2 }), baseLead({ id: "a", sno: 1 })] });
   assert.deepEqual((await repo.list()).map(lead => lead.id), ["a", "b"]);
+});
+
+test("list reads lead blobs concurrently without exceeding its limit", async () => {
+  const records = [1, 2, 3, 4].map(sno => baseLead({ id: `lead-${sno}`, sno }));
+  const store = createBlobFake(Object.fromEntries(records.map(record => [`lead/${record.id}`, record])));
+  const get = store.get.bind(store);
+  let active = 0;
+  let maximum = 0;
+  store.get = async (...args) => {
+    active += 1;
+    maximum = Math.max(maximum, active);
+    await new Promise(resolve => setTimeout(resolve, 10));
+    try { return await get(...args); }
+    finally { active -= 1; }
+  };
+  const { repo } = makeRepo({ records: [], store, repositoryOptions: { readConcurrency: 2 } });
+
+  assert.deepEqual((await repo.list()).map(record => record.sno), [1, 2, 3, 4]);
+  assert.equal(maximum, 2);
 });
 
 test("patchWorkflow merges into the latest record", async () => {
@@ -228,5 +247,83 @@ test("partial seed initialization retries missing records before writing the mar
   const { repo } = makeRepo({ records: [], seedLeads, store });
   await repo.ensureInitialized();
   assert.deepEqual((await repo.list()).map(lead => lead.sno), [1, 2]);
+  assert.notEqual(await store.get("system/initialized-v2"), null);
+});
+
+test("seed initialization writes missing records concurrently without exceeding its limit", async () => {
+  const store = createBlobFake({});
+  const setJSON = store.setJSON.bind(store);
+  let active = 0;
+  let maximum = 0;
+  store.setJSON = async (key, value, options) => {
+    if (!key.startsWith("lead/")) return setJSON(key, value, options);
+    active += 1;
+    maximum = Math.max(maximum, active);
+    await new Promise(resolve => setTimeout(resolve, 10));
+    try { return await setJSON(key, value, options); }
+    finally { active -= 1; }
+  };
+  const seedLeads = [1, 2, 3, 4].map(sno => ({
+    sno, name: `Seed ${sno}`, mobile: String(sno), address: "", category: "",
+    status: "Not Called", followup: "", remarks: ""
+  }));
+  const { repo } = makeRepo({
+    records: [], seedLeads, store,
+    repositoryOptions: { migrationConcurrency: 2 }
+  });
+
+  await repo.ensureInitialized();
+
+  assert.equal(maximum, 2);
+  assert.deepEqual((await repo.list()).map(lead => lead.sno), [1, 2, 3, 4]);
+  assert.notEqual(await store.get("system/initialized-v2"), null);
+});
+
+test("simultaneous seed initializers converge on one complete data set", async () => {
+  const store = createBlobFake({});
+  const setJSON = store.setJSON.bind(store);
+  store.setJSON = async (key, value, options) => {
+    if (key.startsWith("lead/")) await new Promise(resolve => setTimeout(resolve, 5));
+    return setJSON(key, value, options);
+  };
+  const seedLeads = [1, 2, 3, 4].map(sno => ({
+    sno, name: `Seed ${sno}`, mobile: String(sno), address: "", category: "",
+    status: "Not Called", followup: "", remarks: ""
+  }));
+  const first = makeRepo({ records: [], seedLeads, store, repositoryOptions: { migrationConcurrency: 2 } }).repo;
+  const second = makeRepo({ records: [], seedLeads, store, repositoryOptions: { migrationConcurrency: 2 } }).repo;
+
+  await Promise.all([first.ensureInitialized(), second.ensureInitialized()]);
+
+  assert.deepEqual((await first.list()).map(lead => lead.sno), [1, 2, 3, 4]);
+  assert.notEqual(await store.get("system/initialized-v2"), null);
+});
+
+test("failed seed initialization leaves no marker and a retry completes missing records", async () => {
+  const store = createBlobFake({});
+  const setJSON = store.setJSON.bind(store);
+  let failOnce = true;
+  store.setJSON = async (key, value, options) => {
+    if (key === "lead/seed-2" && failOnce) {
+      failOnce = false;
+      throw new Error("temporary write failure");
+    }
+    return setJSON(key, value, options);
+  };
+  const seedLeads = [1, 2, 3, 4].map(sno => ({
+    sno, name: `Seed ${sno}`, mobile: String(sno), address: "", category: "",
+    status: "Not Called", followup: "", remarks: ""
+  }));
+  const { repo } = makeRepo({
+    records: [], seedLeads, store,
+    repositoryOptions: { migrationConcurrency: 2 }
+  });
+
+  await assert.rejects(repo.ensureInitialized(), /temporary write failure/);
+  assert.equal(await store.get("system/initialized-v2"), null);
+
+  await repo.ensureInitialized();
+
+  assert.deepEqual((await repo.list()).map(lead => lead.sno), [1, 2, 3, 4]);
   assert.notEqual(await store.get("system/initialized-v2"), null);
 });

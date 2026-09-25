@@ -4,6 +4,28 @@ const LEAD_PREFIX = "lead/";
 const SERIAL_PREFIX = "serial/";
 const MARKER_KEY = "system/initialized-v2";
 
+async function mapWithConcurrency(items, limit, operation) {
+  if (!items.length) return [];
+  const results = new Array(items.length);
+  let nextIndex = 0;
+  let failure = null;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (!failure) {
+      const index = nextIndex;
+      nextIndex += 1;
+      if (index >= items.length) return;
+      try {
+        results[index] = await operation(items[index], index);
+      } catch (error) {
+        failure ??= error;
+      }
+    }
+  });
+  await Promise.all(workers);
+  if (failure) throw failure;
+  return results;
+}
+
 export class RepositoryConflictError extends Error {
   constructor(message = "The lead changed while it was being saved.") {
     super(message);
@@ -16,16 +38,21 @@ export function createLeadRepository({
   store,
   seedLeads = [],
   now = () => new Date().toISOString(),
-  makeId = () => crypto.randomUUID()
+  makeId = () => crypto.randomUUID(),
+  readConcurrency = 32,
+  migrationConcurrency = 16
 }) {
+  const readLimit = Number.isInteger(readConcurrency) && readConcurrency > 0 ? readConcurrency : 32;
+  const migrationLimit = Number.isInteger(migrationConcurrency) && migrationConcurrency > 0 ? migrationConcurrency : 16;
+
   async function list() {
-    const records = [];
+    const keys = [];
     for await (const page of store.list({ prefix: LEAD_PREFIX, paginate: true })) {
-      for (const { key } of page.blobs) {
-        const record = normalizeStoredLead(await store.get(key, { type: "json" }));
-        if (record) records.push(record);
-      }
+      for (const { key } of page.blobs) keys.push(key);
     }
+    const records = (await mapWithConcurrency(keys, readLimit, async key =>
+      normalizeStoredLead(await store.get(key, { type: "json" }))
+    )).filter(Boolean);
     return records.sort((left, right) => left.sno - right.sno || left.id.localeCompare(right.id));
   }
 
@@ -186,10 +213,15 @@ export function createLeadRepository({
     if (await store.get(MARKER_KEY, { type: "json" })) return;
     const existing = await list();
     const occupied = new Set(existing.map(record => record.sno));
+    const missing = [];
     for (const seed of seedLeads) {
       if (occupied.has(seed.sno)) continue;
       const validation = validateImportRecords(seed, { existingSnos: occupied });
       if (validation.errors.length) throw new Error(`Invalid seed lead ${seed.sno}.`);
+      occupied.add(seed.sno);
+      missing.push({ seed, validated: validation.valid[0] });
+    }
+    await mapWithConcurrency(missing, migrationLimit, async ({ seed, validated }) => {
       const legacy = await store.get(`lead-${seed.sno}`, { type: "json" });
       const workflowCandidate = {
         status: legacy?.status ?? seed.status ?? "Not Called",
@@ -199,21 +231,19 @@ export function createLeadRepository({
       const workflow = validateWorkflowPatch(workflowCandidate);
       const timestamp = now();
       const record = normalizeStoredLead({
-        ...validation.valid[0],
+        ...validated,
         ...(workflow.ok ? workflow.data : {}),
         id: `seed-${seed.sno}`,
         createdAt: timestamp,
         updatedAt: typeof legacy?.updatedAt === "string" ? legacy.updatedAt : timestamp
       });
       if (!record) throw new Error(`Could not normalize seed lead ${seed.sno}.`);
-      await store.setJSON(`${LEAD_PREFIX}${record.id}`, record, { onlyIfNew: true });
-      occupied.add(seed.sno);
-    }
-    const migrated = await list();
-    const migratedSnos = new Set(migrated.map(record => record.sno));
-    if (!seedLeads.every(seed => migratedSnos.has(seed.sno))) {
-      throw new Error("Seed initialization is incomplete.");
-    }
+      const key = `${LEAD_PREFIX}${record.id}`;
+      const write = await store.setJSON(key, record, { onlyIfNew: true });
+      if (write.modified) return;
+      const concurrent = normalizeStoredLead(await store.get(key, { type: "json" }));
+      if (!concurrent || concurrent.sno !== seed.sno) throw new Error(`Could not initialize seed lead ${seed.sno}.`);
+    });
     await store.setJSON(MARKER_KEY, { version: 2, initializedAt: now() });
   }
 
