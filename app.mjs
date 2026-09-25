@@ -1,7 +1,7 @@
 import { createApiClient, ApiError } from "./client-api.mjs";
 import { logoutAdmin } from "./client-actions.mjs";
 import { createImportReviewState, createLatestReadGuard, failImportPreview, parseImportText, readJsonFile } from "./client-import.mjs";
-import { buildLeadFacets, createLeadState, createRangeSelection, filterAndSortLeads } from "./client-state.mjs";
+import { buildLeadFacets, canSelectLeadForMove, createLeadState, createRangeSelection, filterAndSortLeads } from "./client-state.mjs";
 
 window.__leadAppStarted = true;
 
@@ -23,7 +23,8 @@ const els = Object.fromEntries([
   "editAddress", "editCity", "editCategory", "deleteDialog", "deleteLeadName", "confirmDelete",
   "compartmentNav", "filterToggle", "filterPanel", "cityFilters", "categoryFilters", "activeFilters",
   "manageCompartments", "compartmentDialog", "newCompartmentName", "createCompartment", "compartmentRows",
-  "deleteCompartmentDialog", "deleteCompartmentLabel", "deleteCompartmentName", "confirmCompartmentDelete",
+  "deleteCompartmentDialog", "deleteCompartmentLabel", "deleteCompartmentCount", "deleteCompartmentName",
+  "downloadBeforeCompartmentDelete", "confirmCompartmentDelete",
   "bulkMoveBar", "selectedCount", "moveDestination", "moveSelected", "clearSelection"
 ].map(id => [id, document.getElementById(id)]));
 
@@ -129,9 +130,12 @@ function cardHtml(baseLead) {
   const number = normalizeIndiaNumber(lead.mobile);
   const message = encodeURIComponent((els.waTemplate.value || DEFAULT_WA).replaceAll("{name}", lead.name));
   const selected = new Set(selection.ids()).has(String(lead.id));
+  const selectionControl = canSelectLeadForMove(activeCompartmentId, lead)
+    ? `<label class="card-select admin-only"><input class="lead-select" type="checkbox"${selected ? " checked" : ""}> Select lead</label>`
+    : "";
   return `<article class="card" data-id="${esc(lead.id)}">
     <div class="card-head">
-      <label class="card-select admin-only"><input class="lead-select" type="checkbox"${selected ? " checked" : ""}> Select lead</label>
+      ${selectionControl}
       <div class="sno">LEAD #${esc(lead.sno)}</div>
       <h2 class="biz">${esc(lead.name)}</h2>
       <a class="phone" href="tel:${esc(number.tel)}">${esc(lead.mobile)}</a>
@@ -167,7 +171,25 @@ function renderBulkBar() {
   els.bulkMoveBar.hidden = !adminEnabled || count === 0;
 }
 
-function render() {
+function restoreRenderedFocus(focusTarget) {
+  if (!focusTarget) return;
+  let target = null;
+  if (focusTarget.kind === "facet") {
+    target = [...els.filterPanel.querySelectorAll(".facet-checkbox")].find(input =>
+      input.dataset.facet === focusTarget.facet && input.value === focusTarget.value
+    );
+  } else if (focusTarget.kind === "lead-selection") {
+    const card = [...els.leadList.querySelectorAll(".card")].find(item => item.dataset.id === focusTarget.id);
+    target = card?.querySelector(".lead-select");
+  } else if (focusTarget.kind === "compartment") {
+    target = [...els.compartmentNav.querySelectorAll("[data-compartment]")].find(button =>
+      button.dataset.compartment === focusTarget.id
+    );
+  }
+  target?.focus();
+}
+
+function render(focusTarget = null) {
   renderCompartmentNav();
   renderFilters();
   const visible = filtered.slice(0, renderLimit);
@@ -177,13 +199,15 @@ function render() {
   renderBulkBar();
   if (!visible.length) {
     els.leadList.innerHTML = '<div class="empty">No leads match the current filters.</div>';
+    restoreRenderedFocus(focusTarget);
     return;
   }
   els.leadList.innerHTML = visible.map(cardHtml).join("");
   els.leadList.querySelectorAll(".card").forEach((article, index) => wireCard(article, visible[index], index));
+  restoreRenderedFocus(focusTarget);
 }
 
-function applyFilters({ resetLimit = true, clearSelection = false } = {}) {
+function applyFilters({ resetLimit = true, clearSelection = false, focusTarget = null } = {}) {
   if (resetLimit) renderLimit = PAGE_SIZE;
   if (clearSelection) selection.clear();
   const leads = state.allLeads().map(baseLead => state.valuesFor(baseLead.id));
@@ -195,7 +219,7 @@ function applyFilters({ resetLimit = true, clearSelection = false } = {}) {
     categories: selectedCategories,
     sortMode: els.areaSort.value
   });
-  render();
+  render(focusTarget);
 }
 
 async function saveLead(baseLead, article) {
@@ -224,10 +248,11 @@ function wireCard(article, baseLead, visibleIndex) {
   article.querySelector(".update-btn").addEventListener("click", () => saveLead(baseLead, article));
   article.querySelector(".edit-lead").addEventListener("click", () => openEdit(baseLead.id));
   article.querySelector(".delete-lead").addEventListener("click", () => openDelete(baseLead.id));
-  article.querySelector(".lead-select").addEventListener("click", event => {
-    selection.toggle(baseLead.id, visibleIndex, event.shiftKey, filtered.map(item => item.id));
-    render();
-  });
+  const selectLead = article.querySelector(".lead-select");
+  if (selectLead) selectLead.addEventListener("click", event => {
+      selection.toggle(baseLead.id, visibleIndex, event.shiftKey, filtered.map(item => item.id));
+      render({ kind: "lead-selection", id: String(baseLead.id) });
+    });
 }
 
 async function loadAll() {
@@ -342,7 +367,7 @@ els.compartmentNav.addEventListener("click", event => {
   const button = event.target.closest("[data-compartment]");
   if (!button) return;
   activeCompartmentId = button.dataset.compartment;
-  applyFilters({ clearSelection: true });
+  applyFilters({ clearSelection: true, focusTarget: { kind: "compartment", id: activeCompartmentId } });
 });
 els.filterToggle.addEventListener("click", () => {
   const open = els.filterPanel.classList.toggle("open");
@@ -353,7 +378,10 @@ els.filterPanel.addEventListener("change", event => {
   const target = event.target.dataset.facet === "city" ? selectedCities : selectedCategories;
   if (event.target.checked) target.add(event.target.value);
   else target.delete(event.target.value);
-  applyFilters({ clearSelection: true });
+  applyFilters({
+    clearSelection: true,
+    focusTarget: { kind: "facet", facet: event.target.dataset.facet, value: event.target.value }
+  });
 });
 
 els.importLeads.addEventListener("click", openImport);
@@ -455,9 +483,13 @@ els.compartmentRows.addEventListener("click", async event => {
     activeDeleteCompartmentId = id;
     const compartment = compartments.find(item => item.id === id);
     els.deleteCompartmentLabel.textContent = compartment.name;
+    els.deleteCompartmentCount.textContent = `${compartment.count ?? 0} lead${compartment.count === 1 ? "" : "s"}`;
     els.deleteCompartmentName.value = "";
     els.deleteCompartmentDialog.showModal();
   }
+});
+els.downloadBeforeCompartmentDelete.addEventListener("click", () => {
+  if (activeDeleteCompartmentId) downloadCompartment(activeDeleteCompartmentId);
 });
 els.confirmCompartmentDelete.addEventListener("click", async () => {
   const compartment = compartments.find(item => item.id === activeDeleteCompartmentId);

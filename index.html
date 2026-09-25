@@ -890,11 +890,12 @@
 <dialog id="deleteCompartmentDialog" aria-labelledby="deleteCompartmentTitle">
   <div class="dialog-card">
     <h2 id="deleteCompartmentTitle">Delete Compartment</h2>
-    <p class="dialog-note">This permanently deletes this compartment and every lead currently inside it. Download its JSON first if you need a copy.</p>
+    <p class="dialog-note">This permanently deletes this compartment and its <strong id="deleteCompartmentCount">0 leads</strong>.</p>
     <p>Type <strong id="deleteCompartmentLabel"></strong> exactly to continue.</p>
     <label for="deleteCompartmentName">Compartment name</label>
     <input id="deleteCompartmentName" autocomplete="off">
     <div class="dialog-actions">
+      <button id="downloadBeforeCompartmentDelete" class="dialog-btn secondary" type="button">Download JSON First</button>
       <button class="dialog-btn secondary" type="button" data-close-dialog>Cancel</button>
       <button id="confirmCompartmentDelete" class="dialog-btn danger" type="button">Delete Compartment &amp; Leads</button>
     </div>

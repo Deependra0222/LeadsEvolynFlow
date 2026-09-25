@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   buildLeadFacets,
+  canSelectLeadForMove,
   createLeadState,
   createRangeSelection,
   filterAndSortLeads,
@@ -176,4 +177,10 @@ test("range selection can deselect a range and clear its anchor", () => {
   selection.clear();
   selection.toggle("d", 3, true, visible);
   assert.deepEqual(selection.ids(), ["d"]);
+});
+
+test("bulk move selection is available only inside the lead's current compartment", () => {
+  assert.equal(canSelectLeadForMove("", lead()), false);
+  assert.equal(canSelectLeadForMove("room-b", lead()), false);
+  assert.equal(canSelectLeadForMove("room-a", lead()), true);
 });

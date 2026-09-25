@@ -15,6 +15,7 @@ function makeRepository(overrides = {}) {
   const calls = { ensure: 0, patch: [], imports: [], importOptions: [], update: [], remove: [], export: 0 };
   return {
     calls,
+    async isInitialized() { return false; },
     async ensureInitialized() { calls.ensure += 1; },
     async list() { return [...records.values()]; },
     async listImportIndex() {
@@ -66,6 +67,7 @@ function makeCompartmentRepository(overrides = {}) {
     async ensureExistingLeads() { return records.get("existing-leads"); },
     async list() { return [...records.values()]; },
     async get(id) { return records.get(id) || null; },
+    async getDeletion() { return null; },
     async assertWritable(id) {
       calls.writable.push(id);
       const record = records.get(id);
@@ -87,6 +89,7 @@ function makeCompartmentRepository(overrides = {}) {
       return record;
     },
     async beginDelete(id) { calls.beginDelete.push(id); return records.get(id) || null; },
+    async assertDeleteReady() {},
     async finishDelete(id) { calls.finishDelete.push(id); records.delete(id); },
     ...overrides
   };
@@ -131,6 +134,19 @@ test("GET initializes and returns complete leads without caching", async () => {
   assert.equal(response.headers.get("cache-control"), "no-store");
   assert.deepEqual(await response.json(), { leads: [lead()] });
   assert.equal(repository.calls.ensure, 1);
+});
+
+test("completed migration does not recreate a deliberately deleted default compartment", async () => {
+  const repository = makeRepository({ async isInitialized() { return true; } });
+  const compartmentRepository = makeCompartmentRepository({
+    async ensureExistingLeads() { throw new Error("default compartment must not be recreated"); }
+  });
+  const { handler } = makeHandler({ repository, compartmentRepository });
+
+  const response = await handler(request("/api/leads"));
+
+  assert.equal(response.status, 200);
+  assert.equal(repository.calls.ensure, 0);
 });
 
 test("PATCH sends only changed workflow fields", async () => {
@@ -367,6 +383,9 @@ test("public compartment list includes lead counts while mutations require admin
     ["existing-leads", 1],
     ["room-a", 0]
   ]);
+  const rewrittenResponse = await handler(request("/.netlify/functions/lead-data/compartments"));
+  assert.equal(rewrittenResponse.status, 200);
+  assert.deepEqual((await rewrittenResponse.json()).compartments, body.compartments);
   assert.equal((await handler(request("/api/admin/compartments", "POST", { name: "A" }))).status, 401);
 });
 
@@ -408,6 +427,46 @@ test("compartment deletion requires the exact current name", async () => {
   }, { cookie: "lead_admin_session=ok" }));
   assert.equal(response.status, 400);
   assert.deepEqual(compartmentRepository.calls.beginDelete, []);
+});
+
+test("compartment deletion resumes finalization when metadata is already gone", async () => {
+  const repository = makeRepository({
+    async removeByCompartment() { return { deleted: [], errors: [] }; }
+  });
+  const compartmentRepository = makeCompartmentRepository({
+    async get(id) { return id === "room-a" ? null : undefined; },
+    async getDeletion(id) {
+      return id === "room-a" ? { compartmentId: id, name: "Room A", claimKey: "claim", startedAt: NOW } : null;
+    }
+  });
+  const { handler } = makeHandler({ repository, compartmentRepository });
+
+  const response = await handler(request("/api/admin/compartments/room-a", "DELETE", {
+    confirmation: "Room A"
+  }, { cookie: "lead_admin_session=ok" }));
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(compartmentRepository.calls.finishDelete, ["room-a"]);
+});
+
+test("compartment deletion does not scan leads while membership writes are active", async () => {
+  let scanned = false;
+  const repository = makeRepository({
+    async removeByCompartment() { scanned = true; return { deleted: [], errors: [] }; }
+  });
+  const compartmentRepository = makeCompartmentRepository({
+    async assertDeleteReady() {
+      throw Object.assign(new Error("This compartment still has active lead changes."), { code: "CONFLICT" });
+    }
+  });
+  const { handler } = makeHandler({ repository, compartmentRepository });
+
+  const response = await handler(request("/api/admin/compartments/room-a", "DELETE", {
+    confirmation: "Room A"
+  }, { cookie: "lead_admin_session=ok" }));
+
+  assert.equal(response.status, 409);
+  assert.equal(scanned, false);
 });
 
 test("unsupported methods, OPTIONS, and storage failures are safe", async () => {

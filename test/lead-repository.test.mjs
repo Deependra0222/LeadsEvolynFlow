@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createLeadRepository } from "../netlify/lib/lead-repository.mjs";
+import { createCompartmentRepository } from "../netlify/lib/compartment-repository.mjs";
 
 const NOW = "2026-09-24T05:00:00.000Z";
 const baseLead = (overrides = {}) => ({
@@ -217,6 +218,37 @@ test("retrying one import request returns the prior record without duplicating i
 
   assert.equal(first.imported[0].id, retry.imported[0].id);
   assert.equal((await repo.list()).length, 1);
+});
+
+test("a partially completed import request cannot continue in another compartment", async () => {
+  const store = createBlobFake({});
+  const setJSON = store.setJSON.bind(store);
+  let failSecondRow = true;
+  store.setJSON = async (key, value, options) => {
+    if (failSecondRow && key === "lead/import-request_destination-1") {
+      failSecondRow = false;
+      throw new Error("temporary lead write failure");
+    }
+    return setJSON(key, value, options);
+  };
+  const { repo } = makeRepo({ records: [], store });
+  const rows = ["A", "B"].map((name, index) => ({
+    name, mobile: `0${index + 1}`, address: "", category: "", status: "Not Called", followup: "", remarks: ""
+  }));
+
+  const first = await repo.importMany(rows, {
+    requestId: "request_destination", sourceIndexes: [0, 1], compartmentId: "room-a"
+  });
+  assert.equal(first.imported.length, 1);
+  assert.equal(first.errors.length, 1);
+
+  await assert.rejects(
+    repo.importMany(rows, {
+      requestId: "request_destination", sourceIndexes: [0, 1], compartmentId: "room-b"
+    }),
+    /already bound to another compartment/i
+  );
+  assert.equal((await repo.list()).some(record => record.compartmentId === "room-b"), false);
 });
 
 test("an import recovers when the lead write commits before the storage call throws", async () => {
@@ -518,15 +550,12 @@ test("import replay cannot silently change its destination compartment", async (
     sourceIndexes: [0],
     compartmentId: "room-a"
   });
-  const retry = await repo.importMany(rows, {
+  assert.equal(first.imported[0].compartmentId, "room-a");
+  await assert.rejects(repo.importMany(rows, {
     requestId: "request_room",
     sourceIndexes: [0],
     compartmentId: "room-b"
-  });
-
-  assert.equal(first.imported[0].compartmentId, "room-a");
-  assert.equal(retry.imported.length, 0);
-  assert.match(retry.errors[0].error, /different lead data/i);
+  }), /already bound to another compartment/i);
 });
 
 test("bulk move preserves a concurrent viewer workflow update", async () => {
@@ -539,6 +568,76 @@ test("bulk move preserves a concurrent viewer workflow update", async () => {
   assert.equal(result.moved[0].status, "Interested");
   assert.deepEqual(result.unchanged, []);
   assert.deepEqual(result.errors, []);
+});
+
+test("bulk move cannot remove a lead from a compartment once its deletion starts", async () => {
+  const store = createBlobFake({
+    "lead/a": baseLead({ compartmentId: "room-a" }),
+    "compartment/room-a": { id: "room-a", name: "Room A", createdAt: NOW, updatedAt: NOW },
+    "compartment/room-b": { id: "room-b", name: "Room B", createdAt: NOW, updatedAt: NOW }
+  });
+  const compartmentRepository = createCompartmentRepository({
+    store, now: () => NOW, makeLeaseId: (() => { let id = 0; return () => `lease-${++id}`; })()
+  });
+  const { repo } = makeRepo({ records: [], store, repositoryOptions: { compartmentRepository } });
+  await compartmentRepository.beginDelete("room-a");
+
+  const result = await repo.moveMany(["a"], "room-b");
+
+  assert.equal(result.moved.length, 0);
+  assert.equal(result.errors.length, 1);
+  assert.equal((await repo.get("a")).compartmentId, "room-a");
+});
+
+test("an import holds a destination membership lease until all writes finish", async () => {
+  const store = createBlobFake({
+    "compartment/room-a": { id: "room-a", name: "Room A", createdAt: NOW, updatedAt: NOW }
+  });
+  const compartmentRepository = createCompartmentRepository({
+    store, now: () => NOW, makeLeaseId: () => "lease-import"
+  });
+  const { repo } = makeRepo({ records: [], store, repositoryOptions: { compartmentRepository } });
+  const write = store.setJSON.bind(store);
+  let releaseLeadWrite;
+  let signalLeadWrite;
+  const leadWriteStarted = new Promise(resolve => { signalLeadWrite = resolve; });
+  const continueLeadWrite = new Promise(resolve => { releaseLeadWrite = resolve; });
+  store.setJSON = async (key, value, options) => {
+    if (key.startsWith("lead/") && !store.values.has(key)) {
+      signalLeadWrite();
+      await continueLeadWrite;
+    }
+    return write(key, value, options);
+  };
+  const row = { name: "A", mobile: "01", address: "", category: "", status: "Not Called", followup: "", remarks: "" };
+
+  const importing = repo.importMany([row], {
+    requestId: "lease_request", sourceIndexes: [0], compartmentId: "room-a"
+  });
+  await leadWriteStarted;
+  await compartmentRepository.beginDelete("room-a");
+  await assert.rejects(compartmentRepository.assertDeleteReady("room-a"), /active lead changes/i);
+  releaseLeadWrite();
+  await importing;
+  await compartmentRepository.assertDeleteReady("room-a");
+});
+
+test("compartment deletion skips a lead whose membership changed after the scan", async () => {
+  const store = createBlobFake({ "lead/a": baseLead({ compartmentId: "room-a" }) });
+  const get = store.get.bind(store);
+  let leadReads = 0;
+  store.get = async (key, options) => {
+    if (key === "lead/a" && ++leadReads === 2) {
+      store.values.set(key, baseLead({ compartmentId: "room-b" }));
+    }
+    return get(key, options);
+  };
+  const { repo } = makeRepo({ records: [], store });
+
+  const result = await repo.removeByCompartment("room-a");
+
+  assert.deepEqual(result.deleted, []);
+  assert.equal((await repo.get("a")).compartmentId, "room-b");
 });
 
 test("bulk move reports unchanged and missing leads separately", async () => {

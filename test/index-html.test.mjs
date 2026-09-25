@@ -119,11 +119,19 @@ test("admin dialogs include compartment management destination binding and City 
   const html = await read("../index.html");
   for (const id of [
     "compartmentDialog", "newCompartmentName", "createCompartment", "compartmentRows",
-    "deleteCompartmentDialog", "deleteCompartmentName", "confirmCompartmentDelete", "editCity"
+    "deleteCompartmentDialog", "deleteCompartmentName", "deleteCompartmentCount",
+    "downloadBeforeCompartmentDelete", "confirmCompartmentDelete", "editCity"
   ]) assert.match(html, new RegExp(`id="${id}"`));
   assert.match(html, /for="importCompartment"/);
   assert.match(html, /for="editCity"/);
   assert.match(html, /aria-live="polite"/);
+});
+
+test("dynamic compartment and facet controls restore keyboard focus after rerender", async () => {
+  const app = await read("../app.mjs");
+  assert.match(app, /function restoreRenderedFocus/);
+  assert.match(app, /focusTarget:\s*\{\s*kind:\s*"facet"/);
+  assert.match(app, /render\(\{\s*kind:\s*"lead-selection"/);
 });
 
 test("WhatsApp template remains a browser-local preference", async () => {

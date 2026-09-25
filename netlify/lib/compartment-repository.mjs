@@ -8,6 +8,9 @@ import {
 const COMPARTMENT_PREFIX = "compartment/";
 const NAME_PREFIX = "compartment-name/";
 const DELETE_PREFIX = "compartment-delete/";
+const WRITE_PREFIX = "compartment-write/";
+const WRITE_LEASE_MS = 10 * 60 * 1000;
+const NAME_CLAIM_PENDING_MS = 10 * 60 * 1000;
 const EXISTING_ID = "existing-leads";
 const EXISTING_NAME = "Existing Leads";
 
@@ -24,7 +27,9 @@ function nameClaimKey(normalizedKey) {
 export function createCompartmentRepository({
   store,
   now = () => new Date().toISOString(),
-  makeId = () => crypto.randomUUID()
+  makeId = () => crypto.randomUUID(),
+  makeClaimId = () => crypto.randomUUID(),
+  makeLeaseId = () => crypto.randomUUID()
 }) {
   async function get(id) {
     if (!validateCompartmentIdentifier(id)) return null;
@@ -44,24 +49,72 @@ export function createCompartmentRepository({
 
   async function claimName(normalized, compartmentId) {
     const key = nameClaimKey(normalized.key);
-    const result = await store.setJSON(key, { compartmentId, name: normalized.name, claimedAt: now() }, { onlyIfNew: true });
-    if (result.modified) return { key, created: true };
-    const existing = await store.get(key, { type: "json" });
-    if (existing?.compartmentId === compartmentId) return { key, created: false };
-    throw conflict("A compartment with this name already exists.");
+    const claimedAt = now();
+    const claim = {
+      compartmentId,
+      name: normalized.name,
+      claimId: makeClaimId(),
+      state: "pending",
+      claimedAt,
+      expiresAt: new Date(Date.parse(claimedAt) + NAME_CLAIM_PENDING_MS).toISOString()
+    };
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const result = await store.setJSON(key, claim, { onlyIfNew: true });
+      if (result.modified) return { key, claimId: claim.claimId, created: true };
+      const current = await store.getWithMetadata(key, { type: "json" });
+      if (!current) continue;
+      const existing = current.data;
+      if (existing?.compartmentId === compartmentId) {
+        return { key, claimId: existing.claimId || "", created: false };
+      }
+      const owner = await get(existing?.compartmentId);
+      const ownerName = owner ? normalizeCompartmentName(owner.name) : null;
+      if (ownerName?.ok && ownerName.key === normalized.key) {
+        throw conflict("A compartment with this name already exists.");
+      }
+      const expiresAt = Date.parse(existing?.expiresAt);
+      if (existing?.state === "pending" && (!Number.isFinite(expiresAt) || expiresAt > Date.parse(now()))) {
+        throw conflict("A compartment with this name already exists.");
+      }
+      const replaced = await store.setJSON(key, claim, { onlyIfMatch: current.etag });
+      if (replaced.modified) return { key, claimId: claim.claimId, created: true };
+    }
+    throw conflict("The compartment name changed concurrently. Please retry.");
+  }
+
+  async function commitNameClaim(claim, compartmentId) {
+    if (!claim?.key) return;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const current = await store.getWithMetadata(claim.key, { type: "json" });
+      if (!current || current.data?.compartmentId !== compartmentId) return;
+      if (current.data.state === "committed") return;
+      if (claim.claimId && current.data.claimId && current.data.claimId !== claim.claimId) return;
+      const write = await store.setJSON(claim.key, {
+        ...current.data,
+        state: "committed",
+        committedAt: now()
+      }, { onlyIfMatch: current.etag });
+      if (write.modified) return;
+    }
   }
 
   async function ensureExistingLeads() {
     const existing = await get(EXISTING_ID);
     if (existing) return existing;
     const normalized = normalizeCompartmentName(EXISTING_NAME);
-    await claimName(normalized, EXISTING_ID);
+    const claim = await claimName(normalized, EXISTING_ID);
     const timestamp = now();
     const record = { id: EXISTING_ID, name: normalized.name, createdAt: timestamp, updatedAt: timestamp };
     const write = await store.setJSON(`${COMPARTMENT_PREFIX}${EXISTING_ID}`, record, { onlyIfNew: true });
-    if (write.modified) return record;
+    if (write.modified) {
+      await commitNameClaim(claim, EXISTING_ID);
+      return record;
+    }
     const concurrent = await get(EXISTING_ID);
-    if (concurrent) return concurrent;
+    if (concurrent) {
+      await commitNameClaim(claim, EXISTING_ID);
+      return concurrent;
+    }
     throw conflict("Could not create the Existing Leads compartment.");
   }
 
@@ -75,8 +128,10 @@ export function createCompartmentRepository({
       const timestamp = now();
       const record = { id, name: normalized.name, createdAt: timestamp, updatedAt: timestamp };
       const write = await store.setJSON(`${COMPARTMENT_PREFIX}${id}`, record, { onlyIfNew: true });
-      if (write.modified) return record;
-      if (claim.created) await store.delete(claim.key);
+      if (write.modified) {
+        await commitNameClaim(claim, id);
+        return record;
+      }
     }
     throw conflict("Could not allocate a unique compartment identifier.");
   }
@@ -93,14 +148,17 @@ export function createCompartmentRepository({
       if (!record) throw new Error("The stored compartment is invalid.");
       const previous = normalizeCompartmentName(record.name);
       const sameClaim = previous.key === normalized.key;
-      const claim = sameClaim ? { key: nameClaimKey(previous.key), created: false } : await claimName(normalized, id);
+      const claim = await claimName(normalized, id);
+      if (sameClaim) {
+        await commitNameClaim(claim, id);
+        return record;
+      }
       const next = { ...record, name: normalized.name, updatedAt: now() };
       const write = await store.setJSON(key, next, { onlyIfMatch: current.etag });
       if (write.modified) {
-        if (!sameClaim) await store.delete(nameClaimKey(previous.key));
+        await commitNameClaim(claim, id);
         return next;
       }
-      if (!sameClaim && claim.created) await store.delete(claim.key);
     }
     throw conflict("The compartment changed while it was being renamed.");
   }
@@ -108,8 +166,20 @@ export function createCompartmentRepository({
   async function beginDelete(id) {
     const compartment = await get(id);
     if (!compartment) return null;
-    await store.setJSON(`${DELETE_PREFIX}${id}`, { compartmentId: id, startedAt: now() }, { onlyIfNew: true });
+    const normalized = normalizeCompartmentName(compartment.name);
+    await store.setJSON(`${DELETE_PREFIX}${id}`, {
+      compartmentId: id,
+      name: compartment.name,
+      claimKey: normalized.ok ? nameClaimKey(normalized.key) : "",
+      startedAt: now()
+    }, { onlyIfNew: true });
     return compartment;
+  }
+
+  async function getDeletion(id) {
+    if (!validateCompartmentIdentifier(id)) return null;
+    const record = await store.get(`${DELETE_PREFIX}${id}`, { type: "json" });
+    return record && record.compartmentId === id && typeof record.name === "string" ? record : null;
   }
 
   async function isDeleting(id) {
@@ -132,15 +202,67 @@ export function createCompartmentRepository({
     return compartment;
   }
 
+  async function acquireWriteLease(id) {
+    await assertWritable(id);
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      const leaseId = validateCompartmentIdentifier(makeLeaseId());
+      if (!leaseId) throw new Error("Could not allocate a valid write lease.");
+      const key = `${WRITE_PREFIX}${id}/${leaseId}`;
+      const startedAt = now();
+      const expiresAt = new Date(Date.parse(startedAt) + WRITE_LEASE_MS).toISOString();
+      const write = await store.setJSON(key, { compartmentId: id, leaseId, startedAt, expiresAt }, { onlyIfNew: true });
+      if (!write.modified) continue;
+      try {
+        await assertWritable(id);
+        return { key, compartmentId: id, leaseId };
+      } catch (error) {
+        await store.delete(key);
+        throw error;
+      }
+    }
+    throw conflict("Could not reserve this compartment for lead changes.");
+  }
+
+  async function releaseWriteLease(lease) {
+    if (lease?.key) await store.delete(lease.key);
+  }
+
+  async function assertDeleteReady(id) {
+    const prefix = `${WRITE_PREFIX}${id}/`;
+    const currentTime = Date.parse(now());
+    const active = [];
+    for await (const page of store.list({ prefix, paginate: true })) {
+      for (const blob of page.blobs) {
+        const lease = await store.get(blob.key, { type: "json" });
+        if (!lease) continue;
+        if (Date.parse(lease.expiresAt) <= currentTime) await store.delete(blob.key);
+        else active.push(blob.key);
+      }
+    }
+    if (active.length) throw conflict("This compartment still has active lead changes. Retry deletion shortly.");
+  }
+
   async function finishDelete(id) {
     const compartment = await get(id);
     if (compartment) {
-      const normalized = normalizeCompartmentName(compartment.name);
       await store.delete(`${COMPARTMENT_PREFIX}${id}`);
-      if (normalized.ok) await store.delete(nameClaimKey(normalized.key));
     }
     await store.delete(`${DELETE_PREFIX}${id}`);
   }
 
-  return { ensureExistingLeads, list, get, create, rename, beginDelete, finishDelete, isDeleting, assertWritable };
+  return {
+    ensureExistingLeads,
+    list,
+    get,
+    create,
+    rename,
+    beginDelete,
+    getDeletion,
+    finishDelete,
+    isDeleting,
+    assertWritable,
+    acquireWriteLease,
+    releaseWriteLease,
+    assertDeleteReady
+  };
 }

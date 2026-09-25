@@ -80,6 +80,10 @@ export function buildLeadFacets(leads, compartments = []) {
   };
 }
 
+export function canSelectLeadForMove(activeCompartmentId, lead) {
+  return Boolean(activeCompartmentId) && lead?.compartmentId === activeCompartmentId;
+}
+
 export function createRangeSelection() {
   const selected = new Set();
   let anchorIndex = null;

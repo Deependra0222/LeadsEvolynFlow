@@ -3,6 +3,7 @@ import { deriveCity, normalizeStoredLead, validateImportRecords, validateWorkflo
 
 const LEAD_PREFIX = "lead/";
 const SERIAL_PREFIX = "serial/";
+const IMPORT_REQUEST_PREFIX = "import-request/";
 const V2_MARKER_KEY = "system/initialized-v2";
 const V3_MARKER_KEY = "system/initialized-v3";
 
@@ -161,6 +162,33 @@ export function createLeadRepository({
     return updateWithRetry(id, current => ({ ...current, ...core }));
   }
 
+  async function acquireMembershipLeases(compartmentIds) {
+    if (!compartmentRepository) return [];
+    const ids = [...new Set(compartmentIds)].sort();
+    const leases = [];
+    try {
+      for (const id of ids) {
+        if (typeof compartmentRepository.acquireWriteLease === "function") {
+          leases.push(await compartmentRepository.acquireWriteLease(id));
+        } else {
+          await compartmentRepository.assertWritable(id);
+        }
+      }
+      return leases;
+    } catch (error) {
+      await releaseMembershipLeases(leases);
+      throw error;
+    }
+  }
+
+  async function releaseMembershipLeases(leases) {
+    if (!compartmentRepository || typeof compartmentRepository.releaseWriteLease !== "function") return;
+    for (const lease of [...leases].reverse()) {
+      try { await compartmentRepository.releaseWriteLease(lease); }
+      catch { /* expiration lets deletion recover from an abandoned lease */ }
+    }
+  }
+
   async function createRecord(record) {
     for (let attempt = 0; attempt < 10; attempt += 1) {
       const id = makeId();
@@ -177,11 +205,30 @@ export function createLeadRepository({
       (input.sno === undefined || record.sno === input.sno);
   }
 
+  async function bindImportRequest(requestId, compartmentId) {
+    if (!requestId) return;
+    const key = `${IMPORT_REQUEST_PREFIX}${requestId}`;
+    const binding = { requestId, compartmentId, boundAt: now() };
+    try {
+      const write = await store.setJSON(key, binding, { onlyIfNew: true });
+      if (write.modified) return;
+    } catch (error) {
+      const recovered = await readBlob(key);
+      if (!recovered) throw error;
+    }
+    const existing = await readBlob(key);
+    if (existing?.requestId !== requestId || existing?.compartmentId !== compartmentId) {
+      throw new RepositoryConflictError("This import request is already bound to another compartment.");
+    }
+  }
+
   async function importMany(records, { requestId = "", sourceIndexes = [], compartmentId = "existing-leads" } = {}) {
     if (!validateCompartmentIdentifier(compartmentId)) {
       return { imported: [], errors: records.map((_, index) => ({ index, field: "compartmentId", error: "Invalid destination compartment." })) };
     }
-    if (compartmentRepository) await compartmentRepository.assertWritable(compartmentId);
+    const leases = await acquireMembershipLeases([compartmentId]);
+    try {
+      await bindImportRequest(requestId, compartmentId);
     const destinationRecords = records.map(input => ({
       ...input,
       city: typeof input.city === "string" && input.city.trim() ? input.city.trim() : deriveCity(input.address),
@@ -204,7 +251,6 @@ export function createLeadRepository({
       let releaseReservationOnFailure = false;
       let commitUncertain = false;
       try {
-        if (compartmentRepository) await compartmentRepository.assertWritable(compartmentId);
         if (preferredId) {
           const prior = importIndex.leadIds.has(preferredId) ? await get(preferredId) : null;
           if (prior) {
@@ -303,6 +349,9 @@ export function createLeadRepository({
       }
     }
     return { imported, errors };
+    } finally {
+      await releaseMembershipLeases(leases);
+    }
   }
 
   async function remove(id) {
@@ -315,17 +364,32 @@ export function createLeadRepository({
 
   async function moveMany(ids, compartmentId) {
     if (!validateCompartmentIdentifier(compartmentId)) throw new Error("Invalid destination compartment.");
-    if (compartmentRepository) await compartmentRepository.assertWritable(compartmentId);
     const uniqueIds = [...new Set(ids)];
     const results = await collectWithConcurrency(uniqueIds, migrationLimit, async id => {
-      if (compartmentRepository) await compartmentRepository.assertWritable(compartmentId);
-      let unchanged = false;
-      const record = await updateWithRetry(id, current => {
-        unchanged = current.compartmentId === compartmentId;
-        return unchanged ? current : { ...current, compartmentId };
-      });
-      if (!record) return { id, missing: true };
-      return { record, unchanged };
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        const current = await get(id);
+        if (!current) return { id, missing: true };
+        if (current.compartmentId === compartmentId) return { record: current, unchanged: true };
+        const sourceCompartmentId = current.compartmentId;
+        const leases = await acquireMembershipLeases([sourceCompartmentId, compartmentId]);
+        let sourceChanged = false;
+        try {
+          const record = await updateWithRetry(id, latest => {
+            if (latest.compartmentId !== sourceCompartmentId) {
+              sourceChanged = true;
+              throw new RepositoryConflictError("The lead moved concurrently.");
+            }
+            return { ...latest, compartmentId };
+          });
+          if (!record) return { id, missing: true };
+          return { record, unchanged: false };
+        } catch (error) {
+          if (!sourceChanged) throw error;
+        } finally {
+          await releaseMembershipLeases(leases);
+        }
+      }
+      throw new RepositoryConflictError("The lead kept moving between compartments.");
     });
     const moved = [];
     const unchanged = [];
@@ -364,7 +428,11 @@ export function createLeadRepository({
   async function removeByCompartment(compartmentId) {
     if (!validateCompartmentIdentifier(compartmentId)) throw new Error("Invalid compartment identifier.");
     const records = (await list()).filter(record => record.compartmentId === compartmentId);
-    const results = await collectWithConcurrency(records, migrationLimit, record => remove(record.id));
+    const results = await collectWithConcurrency(records, migrationLimit, async record => {
+      const current = await get(record.id);
+      if (!current || current.compartmentId !== compartmentId) return null;
+      return remove(record.id);
+    });
     const deleted = [];
     const errors = [];
     results.forEach((result, index) => {
@@ -456,7 +524,12 @@ export function createLeadRepository({
     await store.setJSON(V3_MARKER_KEY, { version: 3, initializedAt: now() });
   }
 
+  async function isInitialized() {
+    return Boolean(await readBlob(V3_MARKER_KEY));
+  }
+
   return {
+    isInitialized,
     ensureInitialized,
     list,
     listImportIndex,

@@ -20,6 +20,7 @@ function apiPath(pathname) {
   if (!pathname.startsWith(prefix)) return pathname;
   const suffix = pathname.slice(prefix.length);
   if (!suffix) return "/api/leads";
+  if (suffix === "/compartments") return "/api/compartments";
   if (suffix === "/admin" || suffix.startsWith("/admin/")) return `/api${suffix}`;
   return `/api/leads${suffix}`;
 }
@@ -71,9 +72,9 @@ export function createLeadHandler({
   now = () => new Date().toISOString()
 }) {
   async function ensureReady() {
+    if (await repository.isInitialized()) return;
     const defaultCompartment = await compartmentRepository.ensureExistingLeads();
     await repository.ensureInitialized({ defaultCompartmentId: defaultCompartment.id });
-    return defaultCompartment;
   }
 
   return async function handle(request) {
@@ -328,12 +329,17 @@ export function createLeadHandler({
           const parsed = await readJson(request);
           if (!parsed.ok) return parsed.response;
           const compartment = await compartmentRepository.get(id);
-          if (!compartment) return json({ error: "Compartment not found." }, 404);
-          if (!parsed.value || typeof parsed.value !== "object" || parsed.value.confirmation !== compartment.name) {
+          const deletion = compartment ? null : await compartmentRepository.getDeletion(id);
+          const currentName = compartment?.name || deletion?.name;
+          if (!currentName) return json({ error: "Compartment not found." }, 404);
+          if (!parsed.value || typeof parsed.value !== "object" || parsed.value.confirmation !== currentName) {
             return json({ error: "Type the exact compartment name to confirm deletion." }, 400);
           }
-          const deleting = await compartmentRepository.beginDelete(id);
-          if (!deleting) return json({ error: "Compartment not found." }, 404);
+          if (compartment) {
+            const deleting = await compartmentRepository.beginDelete(id);
+            if (!deleting) return json({ error: "Compartment not found." }, 404);
+          }
+          await compartmentRepository.assertDeleteReady(id);
           const result = await repository.removeByCompartment(id);
           if (result.errors.length) {
             return json({ error: "Some leads could not be deleted. Retry to continue.", ...result }, 503);
