@@ -95,6 +95,8 @@ A single lead can use this format:
 
 Upload multiple leads as an array of objects. `name` and `mobile` are required. `sno` is optional; the server assigns the next unused serial number when it is omitted. Status, follow-up, and remarks receive safe defaults when omitted.
 
+The importer also accepts the display labels `S.No.`, `Institute/Business Name`, `Mobile Number`, `Area/Address`, `Category`, `Call Status`, `Next Follow-up`, and `Remarks`. These map to the lowercase fields shown above. Keep mobile numbers in quotation marks so leading zeroes are preserved. If a row contains both versions of one field, their values must match.
+
 ## Backup and password changes
 
 After admin login, select **Download JSON Backup** to save the current lead collection.

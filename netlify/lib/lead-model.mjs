@@ -20,6 +20,16 @@ export const LIMITS = Object.freeze({
 const IMPORT_FIELDS = new Set([
   "sno", "name", "mobile", "address", "category", "status", "followup", "remarks"
 ]);
+const IMPORT_FIELD_ALIASES = new Map([
+  ["S.No.", "sno"],
+  ["Institute/Business Name", "name"],
+  ["Mobile Number", "mobile"],
+  ["Area/Address", "address"],
+  ["Category", "category"],
+  ["Call Status", "status"],
+  ["Next Follow-up", "followup"],
+  ["Remarks", "remarks"]
+]);
 const WORKFLOW_FIELDS = new Set(["status", "followup", "remarks"]);
 const CORE_FIELDS = ["name", "mobile", "address", "category"];
 
@@ -89,27 +99,43 @@ export function validateCorePatch(value) {
 function validateImportRow(value, index, seen) {
   const errors = [];
   if (!isObject(value)) return { errors: [{ index, field: "$", error: "Each lead must be an object." }] };
-  for (const key of Object.keys(value)) {
-    if (!IMPORT_FIELDS.has(key)) errors.push({ index, field: key, error: `Unknown field: ${key}.` });
+  const normalized = {};
+  const sourceFields = new Map();
+  for (const [key, fieldValue] of Object.entries(value)) {
+    const canonical = IMPORT_FIELD_ALIASES.get(key) ?? key;
+    if (!IMPORT_FIELDS.has(canonical)) {
+      errors.push({ index, field: key, error: `Unknown field: ${key}.` });
+      continue;
+    }
+    if (Object.hasOwn(normalized, canonical)) {
+      if (normalized[canonical] !== fieldValue) {
+        const previous = sourceFields.get(canonical);
+        const alias = previous === canonical ? key : previous;
+        errors.push({ index, field: canonical, error: `Conflicting fields: ${canonical} and ${alias}.` });
+      }
+      continue;
+    }
+    normalized[canonical] = fieldValue;
+    sourceFields.set(canonical, key);
   }
   const data = {
-    name: typeof value.name === "string" ? value.name.trim() : "",
-    mobile: typeof value.mobile === "string" ? value.mobile.trim() : "",
-    address: typeof value.address === "string" ? value.address.trim() : "",
-    category: typeof value.category === "string" ? value.category.trim() : "",
-    status: value.status === undefined ? "Not Called" : value.status,
-    followup: value.followup === undefined ? "" : value.followup,
-    remarks: value.remarks === undefined ? "" : value.remarks
+    name: typeof normalized.name === "string" ? normalized.name.trim() : "",
+    mobile: typeof normalized.mobile === "string" ? normalized.mobile.trim() : "",
+    address: typeof normalized.address === "string" ? normalized.address.trim() : "",
+    category: typeof normalized.category === "string" ? normalized.category.trim() : "",
+    status: normalized.status === undefined ? "Not Called" : normalized.status,
+    followup: normalized.followup === undefined ? "" : normalized.followup,
+    remarks: normalized.remarks === undefined ? "" : normalized.remarks
   };
   for (const key of ["name", "mobile", "address", "category"]) {
-    if (value[key] !== undefined && typeof value[key] !== "string") {
+    if (normalized[key] !== undefined && typeof normalized[key] !== "string") {
       errors.push({ index, field: key, error: `${key} must be text.` });
     }
   }
-  if (value.name === undefined || (typeof value.name === "string" && !data.name)) {
+  if (normalized.name === undefined || (typeof normalized.name === "string" && !data.name)) {
     errors.push({ index, field: "name", error: "Name is required." });
   }
-  if (value.mobile === undefined || (typeof value.mobile === "string" && !data.mobile)) {
+  if (normalized.mobile === undefined || (typeof normalized.mobile === "string" && !data.mobile)) {
     errors.push({ index, field: "mobile", error: "Mobile is required." });
   }
   for (const [key, max] of [["name", LIMITS.name], ["mobile", LIMITS.mobile], ["address", LIMITS.address], ["category", LIMITS.category]]) {
@@ -120,14 +146,14 @@ function validateImportRow(value, index, seen) {
   if (typeof data.remarks !== "string" || data.remarks.length > LIMITS.remarks) {
     errors.push({ index, field: "remarks", error: "Remarks must be 5,000 characters or fewer." });
   }
-  if (value.sno !== undefined) {
-    if (!Number.isInteger(value.sno) || value.sno < 1) {
+  if (normalized.sno !== undefined) {
+    if (!Number.isInteger(normalized.sno) || normalized.sno < 1) {
       errors.push({ index, field: "sno", error: "Serial number must be a positive integer." });
-    } else if (seen.has(value.sno)) {
-      errors.push({ index, field: "sno", error: `Serial number ${value.sno} already exists.` });
+    } else if (seen.has(normalized.sno)) {
+      errors.push({ index, field: "sno", error: `Serial number ${normalized.sno} already exists.` });
     } else {
-      data.sno = value.sno;
-      seen.add(value.sno);
+      data.sno = normalized.sno;
+      seen.add(normalized.sno);
     }
   }
   return { data, errors };

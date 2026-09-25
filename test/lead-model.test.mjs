@@ -84,6 +84,58 @@ test("imports apply defaults and reject unknown fields", async () => {
   assert.equal(unknown.errors[0].field, "project");
 });
 
+test("imports accept the website's human-readable JSON field labels", async () => {
+  const { validateImportRecords } = await loadModel();
+  const result = validateImportRecords({
+    "S.No.": 23,
+    "Institute/Business Name": "  Example Institute  ",
+    "Mobile Number": " 09876543210 ",
+    "Area/Address": "  Agra  ",
+    "Category": "  Institute  ",
+    "Call Status": "Follow-up",
+    "Next Follow-up": "2026-10-01T10:30",
+    "Remarks": "Call next week"
+  });
+
+  assert.deepEqual(result.errors, []);
+  assert.deepEqual(result.valid, [{
+    sno: 23,
+    name: "Example Institute",
+    mobile: "09876543210",
+    address: "Agra",
+    category: "Institute",
+    status: "Follow-up",
+    followup: "2026-10-01T10:30",
+    remarks: "Call next week"
+  }]);
+});
+
+test("imports allow mixed canonical and display labels but reject conflicting duplicates", async () => {
+  const { validateImportRecords } = await loadModel();
+  const accepted = validateImportRecords({
+    name: "Same Name",
+    "Institute/Business Name": "Same Name",
+    "Mobile Number": "0123",
+    category: "Store",
+    "Remarks": "Mixed labels"
+  });
+  assert.deepEqual(accepted.errors, []);
+  assert.equal(accepted.valid[0].name, "Same Name");
+  assert.equal(accepted.valid[0].mobile, "0123");
+
+  const rejected = validateImportRecords({
+    name: "Canonical Name",
+    "Institute/Business Name": "Different Display Name",
+    mobile: "0123"
+  });
+  assert.equal(rejected.valid.length, 0);
+  assert.deepEqual(rejected.errors, [{
+    index: 0,
+    field: "name",
+    error: "Conflicting fields: name and Institute/Business Name."
+  }]);
+});
+
 test("imports reject provided core fields with the wrong JSON type", async () => {
   const { validateImportRecords } = await loadModel();
   const result = validateImportRecords({
