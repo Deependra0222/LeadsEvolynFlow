@@ -6,16 +6,18 @@ This folder is a complete Netlify site for a shared telecaller lead list. Netlif
 
 Anyone with the site link can:
 
-- View, search, and filter leads.
+- View and search leads, switch compartments, combine City and Category filters, and sort by Area/Address.
 - Use the Call and WhatsApp buttons.
 - Update status, remarks, and follow-up date with the existing **Update** button.
 
 The shared admin password is required to:
 
 - Import one lead or multiple leads from JSON.
-- Edit core lead details.
-- Delete leads.
-- Download a JSON backup.
+- Create and rename compartments.
+- Edit core lead details, including City.
+- Select one lead or a Shift-click range in the current compartment and move it to another compartment.
+- Delete individual leads or a compartment and all leads inside it.
+- Download either a full JSON backup or one compartment as import-ready JSON.
 
 ## Install and test
 
@@ -67,15 +69,28 @@ Do not use Netlify's plain drag-and-drop uploader. It does not provide the Funct
 
 The original 722 leads are stored in `netlify/data/initial-leads.json`. On the first API request, the Function copies them into Netlify Blobs and writes a one-time initialization marker. Later deployments do not recreate deleted leads.
 
-If an older version of this site already saved status, remarks, or follow-up values under the previous Blob keys, the first migration carries those values into the full records.
+If an older version of this site already saved status, remarks, or follow-up values under the previous Blob keys, the first migration carries those values into the full records. Existing records are assigned to the stable **Existing Leads** compartment, and City is derived from the old Area/Address value when it is unambiguous. Ambiguous locations use `Unknown`; migration does not discard the original address or workflow values.
+
+## Compartments and filters
+
+Compartments are admin-managed folders for lead batches. A lead belongs to exactly one compartment while still keeping its normal Category and City fields. The **All Leads** tab combines every compartment, while each named tab shows only that folder. City and Category filters can be selected individually or together; multiple choices inside one filter are inclusive, while City and Category are combined with each other.
+
+To move leads, log in as admin, open the source compartment, select a lead, then Shift-click another visible lead to select the continuous range. Choose the destination and select **Move**. Selection is limited to the current compartment so that a range cannot accidentally include hidden records from another folder. Moving a lead preserves its status, remarks, follow-up, and other details.
+
+In **Manage Compartments**, an admin can create or rename folders, download one folder, or delete one. A compartment download contains only its leads in the same JSON shape accepted by the importer; it does not include internal IDs or the old compartment assignment, so it can be imported into any selected compartment later.
+
+Deleting a compartment permanently deletes every lead inside it. The confirmation requires typing the compartment's exact current name. Download that compartment first if the data may be needed again. If storage reports a partial failure, the compartment remains marked for deletion and the same delete action can safely be retried.
 
 ## Import Leads from JSON
 
 1. Open the deployed site and select **Admin Login**.
 2. Enter `LEAD_ADMIN_PASSWORD`.
 3. Select **Import Leads**.
-4. Paste JSON or upload a `.json` file.
-5. Select **Preview JSON**, review valid rows and errors, then select **Import Valid Leads**.
+4. Choose one existing destination compartment, or create a new one in the import dialog.
+5. Paste JSON or upload a `.json` file.
+6. Select **Preview JSON**, review valid rows and errors, then select **Import Valid Leads**.
+
+One import batch always goes into one selected compartment. To split a file across folders, divide it into separate imports. The selected destination is bound to the reviewed preview; changing it requires reviewing the JSON again, which prevents a delayed or retried request from silently importing into another folder.
 
 If **Admin Login** does nothing and the page remains on **Loading shared updates...**, the JavaScript module did not load. Confirm that you are using the deployed `https://...netlify.app` URL and that the entire project was deployed—not only `index.html`.
 
@@ -86,6 +101,7 @@ A single lead can use this format:
   "name": "Example Business",
   "mobile": "9876543210",
   "address": "Agra, Uttar Pradesh",
+  "city": "Agra",
   "category": "Jewelry store",
   "status": "Not Called",
   "followup": "",
@@ -93,13 +109,13 @@ A single lead can use this format:
 }
 ```
 
-Upload multiple leads as an array of objects. `name` and `mobile` are required. `sno` is optional; the server assigns the next unused serial number when it is omitted. Status, follow-up, and remarks receive safe defaults when omitted.
+Upload multiple leads as an array of objects. `name` and `mobile` are required. `city` is optional and is derived safely from the address when omitted. `sno` is optional; the server assigns the next unused serial number when it is omitted. Status, follow-up, and remarks receive safe defaults when omitted.
 
-The importer also accepts the display labels `S.No.`, `Institute/Business Name`, `Mobile Number`, `Area/Address`, `Category`, `Call Status`, `Next Follow-up`, and `Remarks`. These map to the lowercase fields shown above. Keep mobile numbers in quotation marks so leading zeroes are preserved. If a row contains both versions of one field, their values must match.
+The importer also accepts the display labels `S.No.`, `Institute/Business Name`, `Mobile Number`, `Area/Address`, `City`, `Category`, `Call Status`, `Next Follow-up`, and `Remarks`. These map to the lowercase fields shown above. Keep mobile numbers in quotation marks so leading zeroes are preserved. If a row contains both versions of one field, their values must match.
 
 ## Backup and password changes
 
-After admin login, select **Download JSON Backup** to save the current lead collection.
+After admin login, select **Download JSON Backup** to save the complete collection. To save only one folder in an import-ready format, open **Manage Compartments** and use that compartment's **Download** action.
 
 - Changing `LEAD_ADMIN_PASSWORD` changes the password used for future logins. Existing 24-hour admin sessions remain active until logout or expiry.
 - Rotating `LEAD_SESSION_SECRET` immediately invalidates every existing admin session. Use this when the password may have been shared unintentionally.
@@ -122,5 +138,6 @@ If an update fails, the typed values remain visible and the card reports that th
 - The WhatsApp message template remains a browser-local preference.
 - Public workflow updates are intentional; do not use this site for lead data that should be private from anyone holding the link.
 - Each lead is a separate Blob record, so changes to different leads do not overwrite each other.
+- Compartment names are stored separately, and each lead stores its current compartment ID and City.
 - If two users change the same field at nearly the same time, the last successful write wins.
 - Monitor usage in Netlify's billing dashboard. Two users and a few similar low-traffic projects should be modest, but a public URL can still be abused.
