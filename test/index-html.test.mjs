@@ -32,13 +32,14 @@ test("viewer can combine area sorting with the existing search and status filter
   assert.match(html, /value="area-desc"/);
 });
 
-test("page exposes the neobrutalist visual system without hiding focus indicators", async () => {
+test("page keeps the original blue and white visual system with visible focus indicators", async () => {
   const html = await read("../index.html");
-  assert.match(html, /--ink:\s*#111111/i);
-  assert.match(html, /--hard-shadow:/i);
-  assert.match(html, /border:\s*3px solid var\(--ink\)/i);
-  assert.match(html, /:focus-visible\s*\{[^}]*outline:\s*3px solid var\(--ink\)/i);
-  assert.match(html, /:focus-visible\s*\{[^}]*box-shadow:\s*0 0 0 6px var\(--yellow\)/i);
+  assert.match(html, /name="theme-color"\s+content="#0b2f59"/i);
+  assert.match(html, /--navy:\s*#0b2f59/i);
+  assert.match(html, /\.topbar\s*\{[^}]*background:\s*linear-gradient\(135deg,var\(--navy\),#124b83\)/i);
+  assert.match(html, /\.card\s*\{[^}]*border:\s*1px solid #dbe7f3[^}]*border-radius:\s*16px/i);
+  assert.match(html, /:focus-visible\s*\{[^}]*outline:\s*3px solid #76aaf1/i);
+  assert.doesNotMatch(html, /Neobrutalist visual system|--hard-shadow|--paper:\s*#fff8e7/i);
 });
 
 test("phone layout releases the tall filter header while scrolling", async () => {
