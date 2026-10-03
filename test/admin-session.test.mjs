@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createAdminAuth, createLoginLimiter } from "../netlify/lib/admin-session.mjs";
+import { createAdminAuth, createLoginLimiter } from "../server/lib/admin-session.mjs";
 
 const PASSWORD = "correct horse battery staple";
 const SECRET = "s".repeat(48);

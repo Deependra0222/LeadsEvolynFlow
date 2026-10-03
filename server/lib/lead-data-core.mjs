@@ -14,15 +14,17 @@ function json(body, status = 200, extraHeaders = {}) {
   });
 }
 
-function apiPath(pathname) {
-  if (pathname.startsWith("/api/")) return pathname;
-  const prefix = "/.netlify/functions/lead-data";
-  if (!pathname.startsWith(prefix)) return pathname;
-  const suffix = pathname.slice(prefix.length);
-  if (!suffix) return "/api/leads";
-  if (suffix === "/compartments") return "/api/compartments";
-  if (suffix === "/admin" || suffix.startsWith("/admin/")) return `/api${suffix}`;
-  return `/api/leads${suffix}`;
+// Vercel rewrites every /api/* request to the single /api/lead-data function and
+// passes the original sub-path in __route. Depending on the runtime, request.url
+// holds either the original URL or the rewritten one, so both forms are accepted.
+const FUNCTION_PATH = "/api/lead-data";
+
+function apiPath(url) {
+  const route = url.searchParams.get("__route");
+  if (url.pathname.replace(/\/+$/, "") === FUNCTION_PATH && route !== null) {
+    return `/api/${route.replace(/^\/+|\/+$/g, "")}`;
+  }
+  return url.pathname.length > 1 ? url.pathname.replace(/\/+$/, "") : url.pathname;
 }
 
 function sameOrigin(request) {
@@ -51,7 +53,8 @@ async function readJson(request) {
 }
 
 function clientKey(request) {
-  return request.headers.get("x-nf-client-connection-ip") ||
+  return request.headers.get("x-real-ip") ||
+    (request.headers.get("x-vercel-forwarded-for") || "").split(",")[0].trim() ||
     (request.headers.get("x-forwarded-for") || "").split(",")[0].trim() ||
     "unknown";
 }
@@ -69,17 +72,24 @@ export function createLeadHandler({
   compartmentRepository,
   auth,
   loginLimiter,
-  now = () => new Date().toISOString()
+  storageLabel = "",
+  now = () => new Date().toISOString(),
+  logError = error => console.error("[lead-data]", error)
 }) {
+  let ready = false;
+
   async function ensureReady() {
-    if (await repository.isInitialized()) return;
-    const defaultCompartment = await compartmentRepository.ensureExistingLeads();
-    await repository.ensureInitialized({ defaultCompartmentId: defaultCompartment.id });
+    if (ready) return;
+    if (!(await repository.isInitialized())) {
+      const defaultCompartment = await compartmentRepository.ensureExistingLeads();
+      await repository.ensureInitialized({ defaultCompartmentId: defaultCompartment.id });
+    }
+    ready = true;
   }
 
   return async function handle(request) {
     const url = new URL(request.url);
-    const path = apiPath(url.pathname);
+    const path = apiPath(url);
 
     if (request.method === "OPTIONS") {
       return new Response(null, {
@@ -92,6 +102,12 @@ export function createLeadHandler({
     }
 
     try {
+      if (path === "/api/health") {
+        if (request.method !== "GET") return methodNotAllowed(["GET", "OPTIONS"]);
+        await ensureReady();
+        return json({ ok: true, storage: storageLabel || "configured", adminConfigured: auth.configured });
+      }
+
       if (path === "/api/leads") {
         if (request.method !== "GET") return methodNotAllowed(["GET", "OPTIONS"]);
         await ensureReady();
@@ -356,6 +372,7 @@ export function createLeadHandler({
       if (error?.code === "NOT_FOUND") return json({ error: error.message }, 404);
       if (error?.code === "VALIDATION") return json({ error: error.message }, 400);
       if (error?.code === "CONFLICT") return json({ error: error.message }, 409);
+      logError(error);
       return json({ error: "Shared storage is temporarily unavailable." }, 500);
     }
   };

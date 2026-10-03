@@ -97,10 +97,16 @@ export function createLeadRepository({
   }
 
   async function list() {
-    const keys = await listKeys(LEAD_PREFIX);
-    const records = (await mapWithConcurrency(keys, readLimit, async key =>
-      normalizeStoredLead(await readBlob(key))
-    )).filter(Boolean);
+    let records;
+    if (typeof store.listJSON === "function") {
+      const entries = await retryRead(() => store.listJSON(LEAD_PREFIX));
+      records = entries.map(entry => normalizeStoredLead(entry.data)).filter(Boolean);
+    } else {
+      const keys = await listKeys(LEAD_PREFIX);
+      records = (await mapWithConcurrency(keys, readLimit, async key =>
+        normalizeStoredLead(await readBlob(key))
+      )).filter(Boolean);
+    }
     return records.sort((left, right) => left.sno - right.sno || left.id.localeCompare(right.id));
   }
 

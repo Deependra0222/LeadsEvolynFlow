@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile, readdir } from "node:fs/promises";
-import { createLeadHandler } from "../netlify/lib/lead-data-core.mjs";
+import { createLeadHandler } from "../server/lib/lead-data-core.mjs";
 
 const NOW = "2026-09-24T06:00:00.000Z";
 const lead = (overrides = {}) => ({
@@ -109,7 +109,7 @@ function makeAuth(overrides = {}) {
 function makeHandler({ repository = makeRepository(), compartmentRepository = makeCompartmentRepository(), auth = makeAuth(), limiter } = {}) {
   const loginLimiter = limiter || { check: () => ({ allowed: true, retryAfterSeconds: 0 }) };
   return {
-    handler: createLeadHandler({ repository, compartmentRepository, auth, loginLimiter, now: () => NOW }),
+    handler: createLeadHandler({ repository, compartmentRepository, auth, loginLimiter, now: () => NOW, logError: () => {} }),
     repository,
     compartmentRepository
   };
@@ -383,7 +383,7 @@ test("public compartment list includes lead counts while mutations require admin
     ["existing-leads", 1],
     ["room-a", 0]
   ]);
-  const rewrittenResponse = await handler(request("/.netlify/functions/lead-data/compartments"));
+  const rewrittenResponse = await handler(request("/api/lead-data?__route=compartments"));
   assert.equal(rewrittenResponse.status, 200);
   assert.deepEqual((await rewrittenResponse.json()).compartments, body.compartments);
   assert.equal((await handler(request("/api/admin/compartments", "POST", { name: "A" }))).status, 401);
@@ -481,12 +481,23 @@ test("unsupported methods, OPTIONS, and storage failures are safe", async () => 
   assert.deepEqual(await response.json(), { error: "Shared storage is temporarily unavailable." });
 });
 
-test("deployable adapter uses strong Blob consistency and one function", async () => {
-  const adapter = await readFile(new URL("../netlify/functions/lead-data.mjs", import.meta.url), "utf8");
-  assert.match(adapter, /getStore\(\{\s*name:\s*"telecaller-leads",\s*consistency:\s*"strong"\s*\}\)/);
-  assert.match(adapter, /LEAD_ADMIN_PASSWORD/);
-  assert.match(adapter, /LEAD_SESSION_SECRET/);
-  const functionFiles = (await readdir(new URL("../netlify/functions/", import.meta.url), { withFileTypes: true }))
-    .filter(entry => entry.isFile() && entry.name.endsWith(".mjs")).map(entry => entry.name);
-  assert.deepEqual(functionFiles, ["lead-data.mjs"]);
+test("Vercel function entry exports every method from one shared handler", async () => {
+  const entry = await readFile(new URL("../api/lead-data.js", import.meta.url), "utf8");
+  for (const method of ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]) {
+    assert.match(entry, new RegExp(`export const ${method} = handle;`));
+  }
+  const functionFiles = (await readdir(new URL("../api/", import.meta.url), { withFileTypes: true }))
+    .filter(entry => entry.isFile()).map(entry => entry.name);
+  assert.deepEqual(functionFiles, ["lead-data.js"]);
+  const app = await readFile(new URL("../server/app.mjs", import.meta.url), "utf8");
+  assert.match(app, /MONGODB_URI/);
+  assert.match(app, /LEAD_ADMIN_PASSWORD/);
+  assert.match(app, /LEAD_SESSION_SECRET/);
+});
+
+test("rewritten Vercel routes resolve nested lead paths", async () => {
+  const { handler, repository } = makeHandler();
+  const response = await handler(request("/api/lead-data?__route=leads/lead-a/workflow", "PATCH", { status: "Interested" }));
+  assert.equal(response.status, 200);
+  assert.deepEqual(repository.calls.patch.at(-1), { id: "lead-a", patch: { status: "Interested" } });
 });

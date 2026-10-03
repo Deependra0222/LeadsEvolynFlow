@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 async function loadModel() {
-  return import("../netlify/lib/compartment-model.mjs");
+  return import("../server/lib/compartment-model.mjs");
 }
 
 test("compartment names normalize and compare case-insensitively", async () => {

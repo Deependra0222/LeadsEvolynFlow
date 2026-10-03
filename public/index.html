@@ -1,0 +1,682 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0b2f59">
+<title>Telecallers Lead</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='%231769e0' d='M3 6.5A2.5 2.5 0 0 1 5.5 4h4l2 2.2h7A2.5 2.5 0 0 1 21 8.7v8.8a2.5 2.5 0 0 1-2.5 2.5h-13A2.5 2.5 0 0 1 3 17.5z'/%3E%3C/svg%3E">
+<style>
+  :root{
+    --navy:#0b2f59;
+    --navy2:#124b83;
+    --blue:#1769e0;
+    --blue2:#2d7eea;
+    --pale:#eaf4ff;
+    --pale2:#f5f9ff;
+    --line:#dbe7f3;
+    --line2:#c9d9ea;
+    --text:#152033;
+    --muted:#667085;
+    --green:#179c52;
+    --amber:#b54708;
+    --purple:#6941c6;
+    --bg:#f2f6fb;
+    --white:#ffffff;
+    --danger:#b42318;
+    --folder:#f5b83d;
+    --folder-dark:#d99a1e;
+    --radius:16px;
+    --shadow:0 8px 24px rgba(14,47,86,.08);
+    --shadow-sm:0 2px 8px rgba(14,47,86,.06);
+  }
+
+  *{box-sizing:border-box}
+  [hidden]{display:none!important}
+  html{scroll-behavior:smooth}
+  body{
+    margin:0;
+    font-family:Inter,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;
+    background:var(--bg);
+    color:var(--text);
+    -webkit-font-smoothing:antialiased;
+  }
+  button,input,select,textarea{font:inherit;color:inherit}
+  button{cursor:pointer}
+  svg{flex:none}
+
+  /* ---------- Top bar ---------- */
+  .topbar{
+    position:sticky;top:0;z-index:30;
+    background:linear-gradient(135deg,var(--navy),var(--navy2));
+    color:#fff;
+    box-shadow:0 6px 20px rgba(4,32,64,.18);
+  }
+  .top-inner{max-width:1320px;margin:0 auto;padding:12px 18px;display:flex;align-items:center;gap:14px}
+  .brand{display:flex;align-items:center;gap:11px;min-width:0;margin-right:auto}
+  .brand-mark{
+    width:38px;height:38px;border-radius:11px;display:grid;place-items:center;
+    background:rgba(255,255,255,.14);border:1px solid rgba(255,255,255,.2)
+  }
+  h1{font-size:18px;line-height:1.15;margin:0;font-weight:850;letter-spacing:.3px}
+  .brand small{display:block;font-size:11.5px;font-weight:600;opacity:.75;letter-spacing:.2px}
+  .count-pill{
+    background:rgba(255,255,255,.14);border:1px solid rgba(255,255,255,.2);
+    border-radius:999px;padding:6px 11px;font-size:12px;font-weight:750;white-space:nowrap
+  }
+  .header-btn{
+    display:inline-flex;align-items:center;gap:7px;
+    border:1px solid rgba(255,255,255,.3);border-radius:10px;padding:8px 12px;
+    background:rgba(255,255,255,.12);color:#fff;font-weight:800;font-size:13px
+  }
+  .header-btn:hover{background:rgba(255,255,255,.2)}
+  .admin-badge{
+    display:inline-flex;align-items:center;gap:6px;padding:5px 10px;border-radius:999px;
+    background:#e7f8ee;color:#15713d;font-size:12px;font-weight:800
+  }
+  body:not([data-admin="true"]) .admin-only{display:none!important}
+
+  /* ---------- Layout ---------- */
+  .shell{
+    max-width:1320px;margin:0 auto;padding:18px 18px 90px;
+    display:grid;grid-template-columns:270px minmax(0,1fr);gap:20px;align-items:start
+  }
+  .sidebar{
+    position:sticky;top:80px;
+    background:#fff;border:1px solid var(--line);border-radius:var(--radius);
+    box-shadow:var(--shadow-sm);padding:14px 12px;
+    max-height:calc(100vh - 100px);overflow:auto
+  }
+  .sidebar-head{display:flex;align-items:center;justify-content:space-between;padding:2px 6px 10px}
+  .sidebar-head h2{margin:0;font-size:12px;letter-spacing:.8px;text-transform:uppercase;color:var(--muted)}
+  .icon-btn{
+    display:inline-flex;align-items:center;gap:5px;padding:5px 9px;border-radius:8px;
+    border:1px solid var(--line2);background:var(--pale2);color:var(--navy);font-size:12px;font-weight:800
+  }
+  .icon-btn:hover{background:var(--pale)}
+
+  .folder-list{display:grid;gap:3px}
+  .folder-item{
+    display:flex;align-items:center;gap:10px;width:100%;
+    padding:9px 10px;border:1px solid transparent;border-radius:11px;
+    background:transparent;color:var(--text);text-align:left;font-weight:700;font-size:14px
+  }
+  .folder-item:hover{background:var(--pale2)}
+  .folder-item.active{background:var(--pale);border-color:#bcd2ea;color:var(--navy)}
+  .folder-item .folder-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .folder-item .folder-count{
+    font-size:11.5px;font-weight:800;color:var(--muted);background:#eef3f9;
+    border-radius:999px;padding:2px 8px;min-width:30px;text-align:center
+  }
+  .folder-item.active .folder-count{background:var(--blue);color:#fff}
+  .folder-divider{height:1px;background:var(--line);margin:7px 6px}
+
+  .sidebar-tools{display:grid;gap:7px;margin-top:14px;padding-top:14px;border-top:1px solid var(--line)}
+  .tool-btn{
+    display:flex;align-items:center;gap:9px;width:100%;
+    padding:10px 11px;border-radius:11px;border:1px solid var(--line2);
+    background:#fff;color:var(--navy);font-weight:800;font-size:13px;text-align:left
+  }
+  .tool-btn:hover{background:var(--pale2)}
+  .tool-btn.primary{background:linear-gradient(135deg,var(--blue),var(--blue2));border-color:var(--blue);color:#fff}
+  .tool-btn.primary:hover{filter:brightness(1.05)}
+
+  .content{min-width:0}
+
+  /* ---------- Folder header ---------- */
+  .folder-hero{
+    display:flex;align-items:center;gap:16px;flex-wrap:wrap;
+    background:#fff;border:1px solid var(--line);border-radius:var(--radius);
+    box-shadow:var(--shadow-sm);padding:16px 18px;margin-bottom:14px
+  }
+  .hero-icon{width:52px;height:52px;border-radius:14px;display:grid;place-items:center;background:#fff7e6}
+  .hero-icon.all{background:var(--pale)}
+  .hero-text{flex:1;min-width:180px}
+  .hero-text .crumb{font-size:12px;color:var(--muted);font-weight:700}
+  .hero-text h2{margin:2px 0 0;font-size:22px;color:var(--navy);line-height:1.2;word-break:break-word}
+  .hero-actions{display:flex;gap:8px;flex-wrap:wrap}
+  .chip-btn{
+    display:inline-flex;align-items:center;gap:6px;padding:8px 11px;border-radius:10px;
+    border:1px solid var(--line2);background:#fff;color:var(--navy);font-weight:800;font-size:13px
+  }
+  .chip-btn:hover{background:var(--pale2)}
+  .chip-btn.danger{color:var(--danger);border-color:#efc7c2;background:#fff}
+  .chip-btn.danger:hover{background:#fff6f5}
+
+  /* ---------- Status stats ---------- */
+  .stats{display:flex;gap:8px;overflow-x:auto;padding:2px 2px 12px;scrollbar-width:thin}
+  .stat{
+    flex:0 0 auto;display:flex;align-items:center;gap:8px;
+    padding:8px 12px;border-radius:12px;border:1px solid var(--line);background:#fff;
+    font-size:13px;font-weight:750;color:#2f3b4c;box-shadow:var(--shadow-sm)
+  }
+  .stat strong{font-size:15px;color:var(--navy)}
+  .stat .dot{width:9px;height:9px;border-radius:50%;background:var(--muted)}
+  .stat.active{border-color:var(--blue);box-shadow:0 0 0 3px rgba(23,105,224,.12)}
+
+  /* ---------- Toolbar ---------- */
+  .toolbar{
+    display:grid;grid-template-columns:minmax(0,1.6fr) repeat(2,minmax(0,.8fr)) auto auto;gap:8px;
+    background:#fff;border:1px solid var(--line);border-radius:var(--radius);
+    box-shadow:var(--shadow-sm);padding:10px;margin-bottom:12px
+  }
+  .search-wrap{position:relative}
+  .search-icon{position:absolute;left:12px;top:50%;transform:translateY(-50%);color:var(--muted);pointer-events:none}
+  .search,.filter{
+    width:100%;min-height:42px;border:1px solid var(--line2);outline:0;border-radius:10px;
+    background:var(--pale2);color:var(--text)
+  }
+  .search,.filter,.field select,.field input,.field textarea,.dialog-card input,.dialog-card select{font-size:14px}
+  .search{padding:10px 12px 10px 38px}
+  .filter{padding:9px 10px;font-weight:650}
+  .search:focus,.filter:focus{border-color:#76aaf1;box-shadow:0 0 0 3px rgba(23,105,224,.1);background:#fff}
+  .toolbar-btn{
+    display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:42px;
+    padding:0 13px;border-radius:10px;border:1px solid var(--line2);background:#fff;color:var(--navy);
+    font-weight:800;font-size:13px;white-space:nowrap
+  }
+  .toolbar-btn:hover{background:var(--pale2)}
+  .toolbar-btn .badge{background:var(--blue);color:#fff;border-radius:999px;padding:1px 7px;font-size:11px}
+
+  .facet-panel{
+    display:none;grid-template-columns:1fr 1fr;gap:14px;
+    margin:0 0 12px;padding:14px;background:#fff;border:1px solid var(--line);border-radius:var(--radius);
+    box-shadow:var(--shadow-sm)
+  }
+  .facet-panel.open{display:grid}
+  .facet-group{min-width:0}
+  .facet-group h2{margin:0 0 8px;color:var(--navy);font-size:13px}
+  .facet-options{display:flex;flex-wrap:wrap;gap:7px;max-height:170px;overflow:auto}
+  .facet-option{
+    display:flex;align-items:center;gap:6px;padding:6px 9px;color:#2f3b4c;background:var(--pale2);
+    border:1px solid var(--line);border-radius:999px;font-size:12px;font-weight:700;cursor:pointer
+  }
+  .facet-option:has(input:checked){background:var(--pale);border-color:#9fc0e6;color:var(--navy)}
+  .facet-option input{width:16px;height:16px;margin:0;accent-color:var(--blue)}
+  .active-filters{display:flex;gap:7px;flex-wrap:wrap;margin:0 0 10px}
+  .active-filters:empty{display:none}
+  .filter-chip,.compartment-badge{
+    display:inline-flex;align-items:center;gap:5px;padding:4px 9px;color:var(--navy);background:var(--pale);
+    border:1px solid #bcd2ea;border-radius:999px;font-size:11.5px;font-weight:800
+  }
+
+  details.settings{
+    background:#fff;border:1px solid var(--line);border-radius:var(--radius);margin:0 0 12px;
+    box-shadow:var(--shadow-sm);overflow:hidden
+  }
+  details.settings summary{
+    cursor:pointer;padding:12px 14px;font-weight:800;color:var(--navy);list-style:none;
+    display:flex;align-items:center;gap:8px;font-size:14px
+  }
+  details.settings summary::-webkit-details-marker{display:none}
+  details.settings summary::after{content:"▾";margin-left:auto;color:var(--muted);transition:transform .2s}
+  details.settings[open] summary::after{transform:rotate(180deg)}
+  .settings-body{padding:0 14px 14px}
+  .settings-body label{display:block;font-size:12px;font-weight:700;color:var(--muted);margin-bottom:6px}
+  .settings-body textarea{
+    width:100%;min-height:88px;resize:vertical;border:1px solid var(--line2);border-radius:10px;
+    padding:10px 11px;outline:none;background:#fff
+  }
+  .helper{font-size:11.5px;color:var(--muted);margin-top:6px;line-height:1.45}
+
+  .summary-line{
+    display:flex;justify-content:space-between;align-items:center;gap:10px;
+    padding:0 4px 10px;color:var(--muted);font-size:12px;font-weight:650
+  }
+
+  .sync-notice{
+    margin:0 0 12px;padding:9px 12px;border:1px solid var(--line);border-radius:10px;
+    background:var(--pale2);color:var(--muted);font-size:12px;font-weight:700
+  }
+  .sync-notice.success{border-color:#b8dfc8;background:#f1fbf5;color:#15713d}
+  .sync-notice.warning{border-color:#efc7c2;background:#fff6f5;color:var(--danger)}
+
+  /* ---------- Lead cards ---------- */
+  .lead-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:14px}
+  .card{
+    background:#fff;border:1px solid var(--line);border-radius:var(--radius);
+    overflow:hidden;box-shadow:var(--shadow);display:flex;flex-direction:column
+  }
+  .card.selected{border-color:var(--blue);box-shadow:0 0 0 3px rgba(23,105,224,.18),var(--shadow)}
+  .card-head{background:linear-gradient(135deg,#e3efff,#f3f8ff);padding:13px 14px;border-bottom:1px solid #dbe8f6}
+  .card-top{display:flex;align-items:center;gap:8px;margin-bottom:6px}
+  .sno{color:var(--blue);font-size:11.5px;font-weight:850;letter-spacing:.4px}
+  .status-pill{
+    margin-left:auto;display:inline-flex;align-items:center;gap:5px;padding:3px 9px;border-radius:999px;
+    font-size:11px;font-weight:800;background:#eef2f6;color:#475467;white-space:nowrap
+  }
+  .status-pill::before{content:"";width:7px;height:7px;border-radius:50%;background:currentColor}
+  .st-not-called{background:#eef2f6;color:#475467}
+  .st-called{background:#e6f0ff;color:var(--blue)}
+  .st-no-answer{background:#fff3e0;color:var(--amber)}
+  .st-follow-up{background:#f1ebff;color:var(--purple)}
+  .st-interested{background:#e7f8ee;color:var(--green)}
+  .st-not-interested{background:#fdecea;color:var(--danger)}
+  .biz{margin:0;font-size:16.5px;line-height:1.3;font-weight:850;color:#102a43;word-break:break-word}
+  .phone{
+    display:inline-flex;align-items:center;gap:6px;margin-top:7px;font-size:18px;font-weight:900;
+    letter-spacing:.25px;color:var(--navy);text-decoration:none
+  }
+  .card-body{padding:12px 14px 14px;display:flex;flex-direction:column;flex:1}
+  .meta{display:grid;gap:7px}
+  .meta-row{display:grid;grid-template-columns:22px 1fr;gap:6px;align-items:start}
+  .meta-row svg{margin-top:1px;color:#7a8ba0}
+  .value{font-size:13px;line-height:1.42;color:#2f3b4c;word-break:break-word}
+  .value .muted{color:var(--muted)}
+
+  .actions{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-top:12px}
+  .action{
+    min-height:44px;border:0;border-radius:12px;color:#fff;font-weight:850;font-size:14.5px;
+    display:flex;align-items:center;justify-content:center;gap:8px;text-decoration:none;
+    box-shadow:0 4px 12px rgba(23,105,224,.15);-webkit-tap-highlight-color:transparent
+  }
+  .action:active{transform:translateY(1px)}
+  .call{background:linear-gradient(135deg,var(--blue),var(--blue2))}
+  .wa{background:linear-gradient(135deg,#159447,#22b660)}
+
+  .work-grid{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-top:12px;padding-top:11px;border-top:1px dashed #d8e4ef}
+  .work-grid .remarks-field{grid-column:1/-1}
+  .field label{display:block;font-size:10.5px;font-weight:800;color:var(--muted);margin-bottom:5px;text-transform:uppercase;letter-spacing:.4px}
+  .field select,.field input,.field textarea{
+    width:100%;border:1px solid #cddbea;background:#fbfdff;color:var(--text);
+    border-radius:10px;padding:9px 10px;outline:0;min-height:40px
+  }
+  .field textarea{min-height:60px;resize:vertical}
+  .field select:focus,.field input:focus,.field textarea:focus,.settings-body textarea:focus{
+    border-color:#76aaf1;box-shadow:0 0 0 3px rgba(23,105,224,.10)
+  }
+  .card-foot{margin-top:auto}
+  .update-btn{
+    width:100%;min-height:44px;margin-top:11px;border:0;border-radius:12px;
+    background:linear-gradient(135deg,var(--navy),var(--blue));color:#fff;font-weight:850;
+    box-shadow:0 4px 12px rgba(23,105,224,.18)
+  }
+  .update-btn:disabled{cursor:wait;opacity:.68}
+  .admin-actions{display:flex;gap:8px;margin-top:8px}
+  .edit-lead,.delete-lead{
+    flex:1;display:inline-flex;align-items:center;justify-content:center;gap:6px;
+    border:1px solid #bcd2ea;border-radius:10px;padding:8px;background:#fff;color:var(--navy);font-weight:800;font-size:13px
+  }
+  .delete-lead{color:var(--danger);border-color:#efc7c2}
+  .card-select{display:flex;align-items:center;gap:8px;margin-bottom:8px;color:var(--navy);font-weight:800;font-size:13px}
+  .card-select input{width:18px;height:18px;margin:0;accent-color:var(--blue)}
+
+  .load-more{
+    width:100%;min-height:46px;margin:16px 0 0;border:1px solid #bcd2ea;background:#fff;color:var(--navy);
+    border-radius:12px;font-weight:850
+  }
+  .empty{
+    grid-column:1/-1;padding:44px 18px;text-align:center;color:var(--muted);background:#fff;
+    border:1px dashed var(--line2);border-radius:var(--radius)
+  }
+  .empty strong{display:block;color:var(--navy);font-size:16px;margin:10px 0 4px}
+
+  .bulk-move-bar{
+    position:sticky;bottom:14px;z-index:18;display:flex;align-items:center;gap:9px;margin:0 0 12px;padding:10px 12px;
+    background:var(--navy);color:#fff;border-radius:14px;box-shadow:0 12px 30px rgba(11,47,89,.3)
+  }
+  body .bulk-move-bar[hidden]{display:none!important}
+  .bulk-move-bar strong{margin-right:auto}
+  .bulk-move-bar select{min-width:170px;padding:8px;font-size:14px;color:var(--text);background:#fff;border:0;border-radius:9px;font-weight:700}
+  .bulk-move-bar .mini-btn{background:#fff;border-color:#fff}
+
+  .jump-top{
+    position:fixed;right:16px;bottom:16px;z-index:30;width:44px;height:44px;border-radius:50%;
+    border:0;background:var(--navy);color:#fff;font-size:18px;font-weight:900;
+    box-shadow:0 8px 22px rgba(11,47,89,.28);display:none
+  }
+  .toast{
+    position:fixed;left:50%;bottom:74px;transform:translateX(-50%) translateY(8px);
+    background:#102a43;color:#fff;padding:10px 14px;border-radius:12px;font-size:13px;font-weight:750;
+    opacity:0;pointer-events:none;transition:.2s;z-index:60;max-width:90vw;text-align:center;
+    box-shadow:0 12px 30px rgba(4,32,64,.3)
+  }
+  .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+
+  /* ---------- Dialogs ---------- */
+  dialog{width:min(640px,calc(100% - 24px));border:0;border-radius:18px;padding:0;box-shadow:0 24px 70px rgba(4,32,64,.3);color:var(--text)}
+  dialog::backdrop{background:rgba(5,24,45,.56);backdrop-filter:blur(2px)}
+  .dialog-card{padding:20px;background:#fff}
+  .dialog-card h2{margin:0 0 6px;color:var(--navy);font-size:20px;display:flex;align-items:center;gap:9px}
+  .dialog-sub{margin:0 0 12px;color:var(--muted);font-size:13px}
+  .dialog-card label{display:block;margin:12px 0 5px;font-size:12px;font-weight:800;color:#52657b}
+  .dialog-card input,.dialog-card textarea,.dialog-card select{
+    width:100%;border:1px solid #cddbea;border-radius:10px;padding:10px 11px;outline:0;background:#fff
+  }
+  .dialog-card input:focus,.dialog-card textarea:focus,.dialog-card select:focus{border-color:#76aaf1;box-shadow:0 0 0 3px rgba(23,105,224,.1)}
+  .dialog-card textarea{min-height:150px;resize:vertical;font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:12px}
+  .dialog-actions{display:flex;gap:8px;justify-content:flex-end;margin-top:16px;flex-wrap:wrap}
+  .dialog-btn{
+    border:1px solid var(--blue);border-radius:10px;padding:9px 14px;background:var(--blue);color:#fff;font-weight:800;font-size:14px
+  }
+  .dialog-btn.secondary{background:#fff;color:var(--navy);border-color:#bcd2ea}
+  .dialog-btn.danger{background:var(--danger);border-color:var(--danger)}
+  .dialog-btn:disabled{opacity:.55;cursor:not-allowed}
+  .error-text{color:var(--danger);font-size:12px;font-weight:700}
+  .table-wrap{max-height:240px;overflow:auto;border:1px solid var(--line);border-radius:10px}
+  table{width:100%;border-collapse:collapse;font-size:12px}
+  th,td{padding:7px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
+  th{position:sticky;top:0;background:var(--pale);color:var(--navy)}
+  .mini-btn{
+    padding:7px 10px;color:var(--navy);background:#fff;border:1px solid #bcd2ea;border-radius:9px;font-weight:800;font-size:13px
+  }
+  .mini-btn.danger{color:var(--danger);background:#fff6f5;border-color:#efc7c2}
+  .inline-create{display:grid;grid-template-columns:1fr auto;gap:8px;align-items:end}
+  .dialog-note{padding:10px;background:#fff6f5;border:1px solid #efc7c2;border-radius:10px;color:var(--danger);font-weight:700}
+  .destination-note{margin:8px 0;color:var(--navy);font-weight:800}
+  .compartment-rows{display:grid;gap:8px;margin-top:14px;max-height:50vh;overflow:auto}
+  .compartment-row{
+    display:grid;grid-template-columns:28px minmax(120px,1fr) auto auto auto;gap:8px;align-items:center;
+    padding:9px;background:var(--pale2);border:1px solid var(--line);border-radius:12px
+  }
+  .compartment-row input{margin:0!important}
+  .drop-zone{
+    display:flex!important;flex-direction:column;align-items:center;gap:6px;margin:12px 0 0!important;padding:18px;
+    border:2px dashed #bcd2ea;border-radius:14px;background:var(--pale2);text-align:center;cursor:pointer;
+    color:var(--navy)!important;font-size:13px!important
+  }
+  .drop-zone.dragging{border-color:var(--blue);background:var(--pale)}
+  .drop-zone input{position:absolute;width:1px;height:1px;opacity:0;pointer-events:none}
+  .drop-zone small{color:var(--muted);font-weight:600}
+  .dialog-fields{display:grid;grid-template-columns:1fr 1fr;gap:0 10px}
+
+  :focus-visible{outline:3px solid #76aaf1;outline-offset:2px}
+
+  @media (prefers-reduced-motion:reduce){
+    *{scroll-behavior:auto!important;transition:none!important}
+  }
+
+  /* ---------- Tablet & phone ---------- */
+  @media (max-width:900px){
+    .shell{grid-template-columns:1fr;gap:12px;padding:12px 12px 90px}
+    .sidebar{position:static;max-height:none;padding:12px}
+    .folder-list{display:flex;gap:8px;overflow-x:auto;padding-bottom:4px;scrollbar-width:thin}
+    .folder-item{flex:0 0 auto;width:auto;max-width:240px;border-color:var(--line);background:var(--pale2)}
+    .folder-divider{display:none}
+    .sidebar-tools{grid-template-columns:repeat(3,minmax(0,1fr));margin-top:10px;padding-top:10px}
+    .tool-btn{justify-content:center;text-align:center;font-size:12.5px;padding:9px 6px}
+    .toolbar{grid-template-columns:1fr 1fr}
+    .toolbar .search-wrap{grid-column:1/-1}
+  }
+  @media (max-width:560px){
+    .topbar{position:static}
+    .search,.filter,.field select,.field input,.field textarea,.dialog-card input,.dialog-card select,.settings-body textarea{font-size:16px}
+    .top-inner{padding:11px 12px;gap:8px;flex-wrap:wrap}
+    .brand small{display:none}
+    .lead-list{grid-template-columns:1fr}
+    .sidebar-tools{grid-template-columns:1fr}
+    .folder-hero{padding:13px}
+    .hero-icon{width:44px;height:44px}
+    .hero-text h2{font-size:19px}
+    .facet-panel{grid-template-columns:1fr}
+    .summary-line{align-items:flex-start;flex-direction:column}
+    .actions{grid-template-columns:1fr 1fr}
+    .work-grid{grid-template-columns:1fr}
+    .dialog-fields{grid-template-columns:1fr}
+    .compartment-row{grid-template-columns:28px 1fr}
+    .compartment-row input{grid-column:2}
+    .compartment-row .mini-btn{grid-column:auto}
+    .bulk-move-bar{flex-wrap:wrap}
+    .bulk-move-bar strong{width:100%}
+    .bulk-move-bar select{flex:1;min-width:0}
+  }
+</style>
+</head>
+<body>
+<header class="topbar">
+  <div class="top-inner">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.8 19.8 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.1 4.18 2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.72c.13.96.36 1.9.7 2.81a2 2 0 0 1-.45 2.11L8.1 9.9a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.9.34 1.85.57 2.81.7A2 2 0 0 1 22 16.92z"/></svg>
+      </span>
+      <div>
+        <h1>TELECALLERS LEAD</h1>
+        <small>Shared lead folders for your calling team</small>
+      </div>
+    </div>
+    <div class="count-pill" id="topCount">0 leads</div>
+    <span class="admin-badge admin-only">● Admin</span>
+    <button id="adminLogin" class="header-btn" type="button">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
+      Admin Login
+    </button>
+    <button id="adminLogout" class="header-btn admin-only" type="button" hidden>Logout</button>
+  </div>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" aria-label="Lead folders">
+    <div class="sidebar-head">
+      <h2>Folders</h2>
+      <button id="newFolderQuick" class="icon-btn admin-only" type="button" aria-label="Create a new folder">＋ New</button>
+    </div>
+    <nav id="compartmentNav" class="folder-list" aria-label="Lead compartments"></nav>
+    <div class="sidebar-tools admin-only" aria-label="Admin lead controls">
+      <button id="importLeads" class="tool-btn primary" type="button">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg>
+        Import Leads
+      </button>
+      <button id="manageCompartments" class="tool-btn" type="button">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M12 11v4M10 13h4"/></svg>
+        Manage Folders
+      </button>
+      <button id="downloadBackup" class="tool-btn" type="button">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5"/><path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/></svg>
+        Download JSON Backup
+      </button>
+    </div>
+  </aside>
+
+  <main class="content">
+    <section class="folder-hero" aria-live="polite">
+      <div id="folderIcon" class="hero-icon all" aria-hidden="true"></div>
+      <div class="hero-text">
+        <div id="folderCrumb" class="crumb">Workspace</div>
+        <h2 id="folderTitle">All Leads</h2>
+      </div>
+      <div id="folderActions" class="hero-actions admin-only" hidden>
+        <button id="folderImport" class="chip-btn" type="button">Import here</button>
+        <button id="folderDownload" class="chip-btn" type="button">Download</button>
+        <button id="folderRename" class="chip-btn" type="button">Rename</button>
+        <button id="folderDelete" class="chip-btn danger" type="button">Delete</button>
+      </div>
+    </section>
+
+    <div id="statusStats" class="stats" aria-label="Call status summary"></div>
+
+    <div class="toolbar">
+      <div class="search-wrap">
+        <svg class="search-icon" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+        <input id="search" class="search" type="search" placeholder="Search name, mobile, area or category…" autocomplete="off" aria-label="Search leads">
+      </div>
+      <select id="statusFilter" class="filter" aria-label="Filter by call status">
+        <option value="">All call statuses</option>
+        <option>Not Called</option>
+        <option>Called</option>
+        <option>No Answer</option>
+        <option>Follow-up</option>
+        <option>Interested</option>
+        <option>Not Interested</option>
+      </select>
+      <select id="areaSort" class="filter sort-filter" aria-label="Sort by area or address">
+        <option value="">Lead order</option>
+        <option value="area-asc">Area A–Z</option>
+        <option value="area-desc">Area Z–A</option>
+      </select>
+      <button id="filterToggle" class="toolbar-btn" type="button" aria-expanded="false" aria-controls="filterPanel">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 5h18l-7 8v6l-4-2v-4z"/></svg>
+        City &amp; Category <span id="filterCount" class="badge" hidden>0</span>
+      </button>
+      <button class="toolbar-btn" id="clearFilters" type="button">Clear</button>
+    </div>
+
+    <section id="filterPanel" class="facet-panel" aria-label="Lead filters">
+      <div class="facet-group"><h2>City / Area</h2><div id="cityFilters" class="facet-options"></div></div>
+      <div class="facet-group"><h2>Category</h2><div id="categoryFilters" class="facet-options"></div></div>
+    </section>
+    <div id="activeFilters" class="active-filters" aria-live="polite"></div>
+
+    <details class="settings">
+      <summary>
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#159447" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 11.5a8.4 8.4 0 0 1-12.4 7.4L3 21l2.1-5.5A8.4 8.4 0 1 1 21 11.5z"/></svg>
+        WhatsApp Message Settings
+      </summary>
+      <div class="settings-body">
+        <label for="waTemplate">Message used when you tap WhatsApp</label>
+        <textarea id="waTemplate"></textarea>
+        <div class="helper">Use <b>{name}</b> anywhere in the message to automatically insert the business name. The message is saved on this phone/browser.</div>
+      </div>
+    </details>
+
+    <div id="syncNotice" class="sync-notice" role="status" aria-live="polite">Loading shared updates...</div>
+
+    <div class="summary-line">
+      <span id="visibleCount">Showing 0</span>
+      <span>Tap a number or Call button to open the dialer</span>
+    </div>
+
+    <div id="bulkMoveBar" class="bulk-move-bar admin-only" role="status" aria-live="polite" hidden>
+      <strong id="selectedCount">0 selected</strong>
+      <select id="moveDestination" aria-label="Move selected leads to compartment"></select>
+      <button id="moveSelected" class="mini-btn" type="button">Move</button>
+      <button id="clearSelection" class="mini-btn" type="button">Clear</button>
+    </div>
+    <section id="leadList" class="lead-list" aria-live="polite"></section>
+    <button id="loadMore" class="load-more" type="button">Load more leads</button>
+  </main>
+</div>
+
+<button id="jumpTop" class="jump-top" type="button" aria-label="Back to top">↑</button>
+<div id="toast" class="toast" role="status"></div>
+
+<dialog id="loginDialog" aria-labelledby="loginTitle">
+  <form id="loginForm" class="dialog-card">
+    <h2 id="loginTitle">Admin Login</h2>
+    <p class="dialog-sub">Admins can import, edit, move and delete leads and folders.</p>
+    <label for="adminPassword">Admin password</label>
+    <input id="adminPassword" type="password" autocomplete="current-password" required>
+    <p id="loginError" class="error-text" role="alert"></p>
+    <div class="dialog-actions">
+      <button class="dialog-btn secondary" type="button" data-close-dialog>Cancel</button>
+      <button class="dialog-btn" type="submit">Login</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="importDialog" aria-labelledby="importTitle">
+  <div class="dialog-card">
+    <h2 id="importTitle">Import Leads from JSON</h2>
+    <p class="dialog-sub">Every lead in one import goes into the folder you choose.</p>
+    <label for="importCompartment">Destination folder</label>
+    <select id="importCompartment" required></select>
+    <div class="inline-create">
+      <div><label for="importNewCompartment">Or create a new folder</label><input id="importNewCompartment" maxlength="80" placeholder="e.g. Jaipur Hotels"></div>
+      <button id="createImportCompartment" class="mini-btn" type="button">Create</button>
+    </div>
+    <label id="dropZone" class="drop-zone" for="jsonFile">
+      <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M17 8l-5-5-5 5"/><path d="M12 3v12"/></svg>
+      <span id="dropZoneText"><b>Upload a JSON file</b> — click or drag it here</span>
+      <small>.json up to 2 MB, one object or an array of leads</small>
+      <input id="jsonFile" type="file" accept="application/json,.json">
+    </label>
+    <label for="jsonText">Or paste one lead object or an array</label>
+    <textarea id="jsonText" spellcheck="false" placeholder='[{"name":"Example Business","mobile":"9876543210","city":"Agra"}]'></textarea>
+    <div class="dialog-actions">
+      <button id="previewImport" class="dialog-btn secondary" type="button">Preview JSON</button>
+    </div>
+    <div id="importPreview" role="status">Paste JSON or choose a file, then preview it.</div>
+    <div class="dialog-actions">
+      <button class="dialog-btn secondary" type="button" data-close-dialog>Cancel</button>
+      <button id="confirmImport" class="dialog-btn" type="button" disabled>Import Valid Leads</button>
+    </div>
+  </div>
+</dialog>
+
+<dialog id="editDialog" aria-labelledby="editTitle">
+  <form id="editForm" class="dialog-card">
+    <h2 id="editTitle">Edit Lead Details</h2>
+    <div class="dialog-fields">
+      <div><label for="editName">Name</label><input id="editName" maxlength="300" required></div>
+      <div><label for="editMobile">Mobile</label><input id="editMobile" maxlength="50" required></div>
+      <div><label for="editAddress">Address</label><input id="editAddress" maxlength="500"></div>
+      <div><label for="editCity">City / Area</label><input id="editCity" maxlength="120" required></div>
+      <div><label for="editCategory">Category</label><input id="editCategory" maxlength="120"></div>
+    </div>
+    <div class="dialog-actions">
+      <button class="dialog-btn secondary" type="button" data-close-dialog>Cancel</button>
+      <button class="dialog-btn" type="submit">Save Details</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="compartmentDialog" aria-labelledby="compartmentTitle">
+  <div class="dialog-card">
+    <h2 id="compartmentTitle">Manage Folders</h2>
+    <p class="dialog-sub">Folders (compartments) group lead batches. A lead lives in exactly one folder.</p>
+    <div class="inline-create">
+      <div><label for="newCompartmentName">New folder name</label><input id="newCompartmentName" maxlength="80" placeholder="e.g. Delhi Gyms"></div>
+      <button id="createCompartment" class="mini-btn" type="button">Create</button>
+    </div>
+    <div id="compartmentRows" class="compartment-rows"></div>
+    <div class="dialog-actions"><button class="dialog-btn secondary" type="button" data-close-dialog>Close</button></div>
+  </div>
+</dialog>
+
+<dialog id="renameDialog" aria-labelledby="renameTitle">
+  <form id="renameForm" class="dialog-card">
+    <h2 id="renameTitle">Rename Folder</h2>
+    <label for="renameInput">Folder name</label>
+    <input id="renameInput" maxlength="80" required>
+    <div class="dialog-actions">
+      <button class="dialog-btn secondary" type="button" data-close-dialog>Cancel</button>
+      <button class="dialog-btn" type="submit">Save Name</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="deleteCompartmentDialog" aria-labelledby="deleteCompartmentTitle">
+  <div class="dialog-card">
+    <h2 id="deleteCompartmentTitle">Delete Folder</h2>
+    <p class="dialog-note">This permanently deletes this folder and its <strong id="deleteCompartmentCount">0 leads</strong>.</p>
+    <p>Type <strong id="deleteCompartmentLabel"></strong> exactly to continue.</p>
+    <label for="deleteCompartmentName">Folder name</label>
+    <input id="deleteCompartmentName" autocomplete="off">
+    <div class="dialog-actions">
+      <button id="downloadBeforeCompartmentDelete" class="dialog-btn secondary" type="button">Download JSON First</button>
+      <button class="dialog-btn secondary" type="button" data-close-dialog>Cancel</button>
+      <button id="confirmCompartmentDelete" class="dialog-btn danger" type="button">Delete Folder &amp; Leads</button>
+    </div>
+  </div>
+</dialog>
+
+<dialog id="deleteDialog" aria-labelledby="deleteTitle">
+  <div class="dialog-card">
+    <h2 id="deleteTitle">Delete Lead</h2>
+    <p>This permanently removes <strong id="deleteLeadName"></strong>. Continue?</p>
+    <div class="dialog-actions">
+      <button class="dialog-btn secondary" type="button" data-close-dialog>Cancel</button>
+      <button id="confirmDelete" class="dialog-btn danger" type="button">Delete Lead</button>
+    </div>
+  </div>
+</dialog>
+
+<script id="startupGuard">
+window.__leadAppStarted = false;
+(() => {
+  const message = window.location.protocol === "file:"
+    ? "This page cannot save data when index.html is opened directly. Deploy the project to Vercel (or run npm run dev) and use that URL."
+    : "The application files did not load. Deploy the complete project to Vercel, not index.html by itself.";
+  document.getElementById("adminLogin").addEventListener("click", () => {
+    if (!window.__leadAppStarted) alert(message);
+  });
+  setTimeout(() => {
+    if (window.__leadAppStarted) return;
+    const notice = document.getElementById("syncNotice");
+    notice.textContent = message;
+    notice.className = "sync-notice warning";
+  }, 2000);
+})();
+</script>
+<script type="module" src="./app.mjs"></script>
+</body>
+</html>

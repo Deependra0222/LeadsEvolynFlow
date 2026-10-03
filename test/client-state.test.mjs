@@ -8,7 +8,7 @@ import {
   filterAndSortLeads,
   matchesLead,
   sortLeadsByArea
-} from "../client-state.mjs";
+} from "../public/client-state.mjs";
 
 const lead = (overrides = {}) => ({
   id: "a", sno: 1, name: "A", mobile: "1", address: "", city: "Unknown", category: "",

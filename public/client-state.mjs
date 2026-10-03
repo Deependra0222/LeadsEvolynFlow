@@ -131,6 +131,11 @@ export function createLeadState() {
       return sortRecords([...confirmed.values()].map(lead => ({ ...lead })));
     },
 
+    confirmedFor(id) {
+      const lead = confirmed.get(String(id));
+      return lead ? { ...lead } : null;
+    },
+
     valuesFor(id) {
       const key = String(id);
       const lead = confirmed.get(key);

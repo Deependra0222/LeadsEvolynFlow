@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { logoutAdmin } from "../client-actions.mjs";
+import { logoutAdmin } from "../public/client-actions.mjs";
 
 test("logout reports success only after the server clears the session", async () => {
   const events = [];

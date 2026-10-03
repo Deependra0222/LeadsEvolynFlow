@@ -7,10 +7,12 @@ export class ApiError extends Error {
   }
 }
 
-export function createApiClient(fetchImpl = fetch, { timeoutMs = 30_000 } = {}) {
-  async function withTimeout(operation) {
+// Bulk writes (confirmed imports, moves, folder deletes) can take longer than a
+// normal request, so they get a longer timeout that still fits the 60s function limit.
+export function createApiClient(fetchImpl = fetch, { timeoutMs = 30_000, bulkTimeoutMs = 75_000 } = {}) {
+  async function withTimeout(operation, limitMs = timeoutMs) {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    const timeout = setTimeout(() => controller.abort(), limitMs);
     try {
       return await operation(controller.signal);
     } catch (error) {
@@ -21,7 +23,7 @@ export function createApiClient(fetchImpl = fetch, { timeoutMs = 30_000 } = {}) 
     }
   }
 
-  async function requestJson(path, { method = "GET", body } = {}) {
+  async function requestJson(path, { method = "GET", body, bulk = false } = {}) {
     return withTimeout(async signal => {
       const options = { method, credentials: "same-origin", signal, headers: { accept: "application/json" } };
       if (body !== undefined) {
@@ -37,7 +39,7 @@ export function createApiClient(fetchImpl = fetch, { timeoutMs = 30_000 } = {}) 
       }
       if (!response.ok) throw new ApiError(payload.error || "Request failed.", response.status, payload.errors);
       return payload;
-    });
+    }, bulk ? Math.max(timeoutMs, bulkTimeoutMs) : timeoutMs);
   }
 
   async function download(path, fallbackName, failureMessage) {
@@ -66,11 +68,11 @@ export function createApiClient(fetchImpl = fetch, { timeoutMs = 30_000 } = {}) 
     async login(password) { return (await requestJson("/api/admin/login", { method: "POST", body: { password } })).authenticated; },
     async logout() { return (await requestJson("/api/admin/logout", { method: "POST", body: {} })).authenticated; },
     async previewImport(records, compartmentId) { return requestJson("/api/leads/import", { method: "POST", body: { preview: true, compartmentId, records } }); },
-    async importLeads(records, requestId, compartmentId) { return requestJson("/api/leads/import", { method: "POST", body: { preview: false, requestId, compartmentId, records } }); },
+    async importLeads(records, requestId, compartmentId) { return requestJson("/api/leads/import", { method: "POST", body: { preview: false, requestId, compartmentId, records }, bulk: true }); },
     async createCompartment(name) { return (await requestJson("/api/admin/compartments", { method: "POST", body: { name } })).compartment; },
     async renameCompartment(id, name) { return (await requestJson(`/api/admin/compartments/${encodeURIComponent(id)}`, { method: "PUT", body: { name } })).compartment; },
-    async deleteCompartment(id, confirmation) { return requestJson(`/api/admin/compartments/${encodeURIComponent(id)}`, { method: "DELETE", body: { confirmation } }); },
-    async moveLeads(leadIds, compartmentId) { return requestJson("/api/admin/leads/move", { method: "POST", body: { leadIds, compartmentId } }); },
+    async deleteCompartment(id, confirmation) { return requestJson(`/api/admin/compartments/${encodeURIComponent(id)}`, { method: "DELETE", body: { confirmation }, bulk: true }); },
+    async moveLeads(leadIds, compartmentId) { return requestJson("/api/admin/leads/move", { method: "POST", body: { leadIds, compartmentId }, bulk: true }); },
     async downloadCompartment(id) { return download(`/api/admin/compartments/${encodeURIComponent(id)}/export`, "compartment-leads.json", "Compartment download failed."); },
     async updateLead(id, core) { return (await requestJson(`/api/leads/${encodeURIComponent(id)}`, { method: "PUT", body: core })).lead; },
     async deleteLead(id) { return requestJson(`/api/leads/${encodeURIComponent(id)}`, { method: "DELETE" }); },
