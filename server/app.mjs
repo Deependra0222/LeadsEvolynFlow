@@ -13,6 +13,14 @@ const SEED_URL = new URL("./data/initial-leads.json", import.meta.url);
 const DEFAULT_DB = "leadsevolynflow";
 const DEFAULT_COLLECTION = "lead_store";
 
+// Vercel's MongoDB Atlas integration can add a custom prefix to the variable it
+// creates (for example STORAGE_MONGODB_URI), so accept any *_MONGODB_URI as well.
+export function resolveMongoUri(env) {
+  if (env.MONGODB_URI) return env.MONGODB_URI;
+  const prefixed = Object.keys(env).filter(name => name.endsWith("_MONGODB_URI") && env[name]).sort();
+  return prefixed.length ? env[prefixed[0]] : "";
+}
+
 function json(body, status) {
   return Response.json(body, { status, headers: { "cache-control": "no-store" } });
 }
@@ -23,7 +31,7 @@ function json(body, status) {
 export function resolveSessionSecret(env) {
   if (env.LEAD_SESSION_SECRET) return env.LEAD_SESSION_SECRET;
   if (!env.LEAD_ADMIN_PASSWORD) return "";
-  return createHmac("sha256", `lead-session:${env.MONGODB_URI || "local"}`)
+  return createHmac("sha256", `lead-session:${resolveMongoUri(env) || "local"}`)
     .update(env.LEAD_ADMIN_PASSWORD)
     .digest("base64url");
 }
@@ -45,12 +53,13 @@ export function connectMongoCollection({ uri, dbName = DEFAULT_DB, collectionNam
 }
 
 async function createStore(env) {
-  if (env.MONGODB_URI) {
+  const uri = resolveMongoUri(env);
+  if (uri) {
     return {
       label: "mongodb",
       store: createMongoStore({
         collection: connectMongoCollection({
-          uri: env.MONGODB_URI,
+          uri,
           dbName: env.MONGODB_DB || DEFAULT_DB,
           collectionName: env.MONGODB_COLLECTION || DEFAULT_COLLECTION
         })
@@ -67,7 +76,7 @@ export async function createServerHandler({ env = process.env, store: providedSt
   const selected = providedStore ? { label: "custom", store: providedStore } : await createStore(env);
   if (!selected) {
     return async function missingDatabase() {
-      return json({ error: "Database is not configured. Add MONGODB_URI in Vercel → Settings → Environment Variables, then redeploy." }, 503);
+      return json({ error: "Database is not configured. Add MONGODB_URI (or connect MongoDB Atlas under Storage) in Vercel → Settings → Environment Variables, then redeploy." }, 503);
     };
   }
   const seedLeads = String(env.SEED_INITIAL_LEADS ?? "true").toLowerCase() === "false"

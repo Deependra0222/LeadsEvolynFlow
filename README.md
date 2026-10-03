@@ -30,7 +30,7 @@ vercel.json        Vercel build, routing and function settings
 
 The app creates the `leadsevolynflow` database and `lead_store` collection automatically on first use.
 
-> Shortcut: in Vercel you can also add MongoDB Atlas from **Storage / Marketplace → MongoDB Atlas**. It creates a free cluster and sets `MONGODB_URI` for you. You still need to set `LEAD_ADMIN_PASSWORD` yourself.
+> Shortcut: in Vercel you can also add MongoDB Atlas from **Storage / Marketplace → MongoDB Atlas**. It creates a free cluster and sets the connection variable for you (`MONGODB_URI`, or a prefixed name like `STORAGE_MONGODB_URI`; both work). You still need to set `LEAD_ADMIN_PASSWORD` yourself.
 
 ## Step 2 — Deploy to Vercel
 
@@ -40,7 +40,7 @@ The app creates the `leadsevolynflow` database and `lead_store` collection autom
 
    | Name | Value | Required |
    |---|---|---|
-   | `MONGODB_URI` | The Atlas connection string from Step 1 | Yes |
+   | `MONGODB_URI` | The Atlas connection string from Step 1. If you connected Atlas through Vercel **Storage**, a prefixed name such as `STORAGE_MONGODB_URI` works as-is | Yes |
    | `LEAD_ADMIN_PASSWORD` | **The admin password you choose** | Yes |
    | `LEAD_SESSION_SECRET` | A random string of 32+ characters | Optional |
    | `SEED_INITIAL_LEADS` | `false` to start with no sample leads | Optional |
