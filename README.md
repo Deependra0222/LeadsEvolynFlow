@@ -1,100 +1,92 @@
-# Telecaller Leads — Netlify Deployment
+# Telecallers Lead — Vercel + MongoDB Atlas
 
-This folder is a complete Netlify site for a shared telecaller lead list. Netlify Blobs stores full lead records separately from `index.html`, so successful changes remain after a refresh, on another device, and after later deployments.
+A shared lead list for a telecalling team. Leads are organised into **folders**, everyone with the link can call, WhatsApp and update call status, and an admin (with a password you choose) can import, edit, move and delete leads and folders.
 
-## Permissions
+- **Hosting:** Vercel (free Hobby plan) — static page in `public/` plus one serverless function in `api/`.
+- **Database:** MongoDB Atlas **M0** free cluster — a JSON document database with **512 MB free forever**, no credit card needed. Every lead is stored as a JSON document, so you can browse and export your data directly in Atlas.
 
-Anyone with the site link can:
+512 MB is far more than this app needs: the 722 sample leads take well under 1 MB, so the free tier holds hundreds of thousands of leads.
 
-- View and search leads, switch compartments, combine City and Category filters, and sort by Area/Address.
-- Use the Call and WhatsApp buttons.
-- Update status, remarks, and follow-up date with the existing **Update** button.
+## Project layout
 
-The shared admin password is required to:
-
-- Import one lead or multiple leads from JSON.
-- Create and rename compartments.
-- Edit core lead details, including City.
-- Select one lead or a Shift-click range in the current compartment and move it to another compartment.
-- Delete individual leads or a compartment and all leads inside it.
-- Download either a full JSON backup or one compartment as import-ready JSON.
-
-## Install and test
-
-Install a supported Node.js LTS release (Node 20 or 22), then run:
-
-```powershell
-npm install
-npm test
+```
+public/            The web app (index.html + browser modules)
+api/lead-data.js   The single Vercel Function; vercel.json routes every /api/* path to it
+server/lib/        Lead, folder (compartment) and admin-session logic + storage adapters
+server/data/       The original 722 leads, loaded into the database on first run
+scripts/           Local development server
+vercel.json        Vercel build, routing and function settings
 ```
 
-Do not double-click `index.html` to run the app. Browser security blocks its JavaScript modules in that mode, and there is no Netlify Function or Blob storage behind a local file. For local development, use `npx netlify-cli dev`; on Windows, use Node 20 or 22 LTS rather than an odd-numbered Node release.
+## Step 1 — Create the free MongoDB Atlas database
 
-## Required environment variables
+1. Sign up at [mongodb.com/cloud/atlas/register](https://www.mongodb.com/cloud/atlas/register) (Google sign-in works).
+2. Choose **Create cluster → M0 (Free)**. For provider/region pick **AWS → Mumbai (ap-south-1)**. That matches the Vercel region in `vercel.json` (`bom1`, Mumbai), so imports stay fast. If you pick another region, change `"regions"` in `vercel.json` to the closest Vercel region.
+3. **Database Access → Add New Database User:** choose a username and an auto-generated password (letters and digits only avoid URL-encoding problems). Role: *Read and write to any database*.
+4. **Network Access → Add IP Address → Allow access from anywhere** (`0.0.0.0/0`). Vercel functions don't use fixed IP addresses, so this is required. The database user and password still protect the data.
+5. **Database → Connect → Drivers** and copy the connection string. It looks like:
+   `mongodb+srv://USER:PASSWORD@cluster0.xxxxx.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0`
+   Replace `<db_password>` with the user's real password.
 
-Configure these server-only values in Netlify under **Site configuration → Environment variables**:
+The app creates the `leadsevolynflow` database and `lead_store` collection automatically on first use.
 
-- `LEAD_ADMIN_PASSWORD`: the strong shared password used by the two administrators.
-- `LEAD_SESSION_SECRET`: an independent random signing secret with at least 32 characters.
+> Shortcut: in Vercel you can also add MongoDB Atlas from **Storage / Marketplace → MongoDB Atlas**. It creates a free cluster and sets `MONGODB_URI` for you. You still need to set `LEAD_ADMIN_PASSWORD` yourself.
 
-Generate a suitable session secret with:
+## Step 2 — Deploy to Vercel
 
-```powershell
+1. Push this repository to GitHub (it already is if you're reading this there).
+2. At [vercel.com/new](https://vercel.com/new), import the repository. Leave **Framework Preset: Other** and leave the build and output settings alone. `vercel.json` already sets the output to `public/`.
+3. Under **Environment Variables**, add:
+
+   | Name | Value | Required |
+   |---|---|---|
+   | `MONGODB_URI` | The Atlas connection string from Step 1 | Yes |
+   | `LEAD_ADMIN_PASSWORD` | **The admin password you choose** | Yes |
+   | `LEAD_SESSION_SECRET` | A random string of 32+ characters | Optional |
+   | `SEED_INITIAL_LEADS` | `false` to start with no sample leads | Optional |
+   | `MONGODB_DB` / `MONGODB_COLLECTION` | Override the database or collection name | Optional |
+
+4. Click **Deploy**. When it finishes, open `https://your-project.vercel.app/api/health`. You should see `{"ok":true,"storage":"mongodb","adminConfigured":true}`.
+
+If the health check reports *Database is not configured*, `MONGODB_URI` is missing. If it reports *Shared storage is temporarily unavailable*, check the function logs in Vercel (**Deployments → your deployment → Functions/Logs**). The usual causes are a wrong password in the URI or a missing `0.0.0.0/0` network rule.
+
+Generate a session secret (optional) with:
+
+```bash
 node -e "console.log(require('node:crypto').randomBytes(48).toString('base64url'))"
 ```
 
-Do not put real secrets in `index.html`, `netlify.toml`, `.env.example`, or Git. For local testing only, copy `.env.example` to an untracked `.env` file and add development values there.
+Never put real secrets in `public/`, `vercel.json`, `.env.example` or Git.
 
-## Deploy to Netlify
+### Changing the admin password
 
-Git-based deployment is recommended because this project includes a bundled Function:
+Edit `LEAD_ADMIN_PASSWORD` in **Vercel → Project → Settings → Environment Variables**, then **Redeploy** (environment changes apply to new deployments only).
 
-1. Place this folder in a GitHub, GitLab, or Bitbucket repository.
-2. In Netlify, choose **Add new project** and import the repository.
-3. Leave the build command empty; `netlify.toml` publishes the project root and bundles `netlify/functions`.
-4. Add both required environment variables.
-5. Deploy the site.
+- If `LEAD_SESSION_SECRET` is **not** set, changing the password also signs every admin out immediately.
+- If it **is** set, existing 24-hour admin sessions remain valid until logout or expiry. Rotate `LEAD_SESSION_SECRET` to sign everyone out.
 
-For command-line deployment:
+## Using the app
 
-```powershell
-npx netlify-cli login
-npx netlify-cli init
-npx netlify-cli deploy --build --prod
-```
+### Everyone with the link can
 
-Do not use Netlify's plain drag-and-drop uploader. It does not provide the Function build and environment configuration this site requires.
+- Browse folders in the left sidebar (a horizontal strip on phones), or open **All Leads**.
+- Search, filter by call status (tap a status chip such as *Interested* or *Follow-up*), filter by City and Category, and sort by Area A–Z / Z–A.
+- Use **Call** and **WhatsApp** on each lead. The WhatsApp message template is saved in each browser.
+- Change status, remarks, and follow-up and press **Update**. The change is saved to the database, so it stays after a refresh and shows on every other phone or computer.
 
-## Initial data
+### Admin (after **Admin Login**)
 
-The original 722 leads are stored in `netlify/data/initial-leads.json`. On the first API request, the Function copies them into Netlify Blobs and writes a one-time initialization marker. Later deployments do not recreate deleted leads.
+- **Import Leads** into any folder (or create one in the import dialog). You can drop a `.json` file onto the upload area, choose one, or paste JSON. Select **Preview JSON**, review the rows, then **Import Valid Leads**.
+- **Folders:** the sidebar's **＋ New** or **Manage Folders** creates folders. When a folder is open, its header has **Import here**, **Download**, **Rename** and **Delete**.
+- **Move leads:** open a folder, tick a lead, Shift-click another to select a range, choose the destination in the dark bar and press **Move**. Status, remarks and follow-up move with the lead.
+- **Edit Lead / Delete Lead** on any card.
+- **Download JSON Backup** saves every lead. A folder's **Download** saves just that folder in a format you can import again.
 
-If an older version of this site already saved status, remarks, or follow-up values under the previous Blob keys, the first migration carries those values into the full records. Existing records are assigned to the stable **Existing Leads** compartment, and City is derived from the old Area/Address value when it is unambiguous. Ambiguous locations use `Unknown`; migration does not discard the original address or workflow values.
+Deleting a folder permanently deletes every lead inside it. You must type the folder's exact name, and the dialog offers **Download JSON First**.
 
-## Compartments and filters
+## Import JSON format
 
-Compartments are admin-managed folders for lead batches. A lead belongs to exactly one compartment while still keeping its normal Category and City fields. The **All Leads** tab combines every compartment, while each named tab shows only that folder. City and Category filters can be selected individually or together; multiple choices inside one filter are inclusive, while City and Category are combined with each other.
-
-To move leads, log in as admin, open the source compartment, select a lead, then Shift-click another visible lead to select the continuous range. Choose the destination and select **Move**. Selection is limited to the current compartment so that a range cannot accidentally include hidden records from another folder. Moving a lead preserves its status, remarks, follow-up, and other details.
-
-In **Manage Compartments**, an admin can create or rename folders, download one folder, or delete one. A compartment download contains only its leads in the same JSON shape accepted by the importer; it does not include internal IDs or the old compartment assignment, so it can be imported into any selected compartment later.
-
-Deleting a compartment permanently deletes every lead inside it. The confirmation requires typing the compartment's exact current name. Download that compartment first if the data may be needed again. If storage reports a partial failure, the compartment remains marked for deletion and the same delete action can safely be retried.
-
-## Import Leads from JSON
-
-1. Open the deployed site and select **Admin Login**.
-2. Enter `LEAD_ADMIN_PASSWORD`.
-3. Select **Import Leads**.
-4. Choose one existing destination compartment, or create a new one in the import dialog.
-5. Paste JSON or upload a `.json` file.
-6. Select **Preview JSON**, review valid rows and errors, then select **Import Valid Leads**.
-
-One import batch always goes into one selected compartment. To split a file across folders, divide it into separate imports. The selected destination is bound to the reviewed preview; changing it requires reviewing the JSON again, which prevents a delayed or retried request from silently importing into another folder.
-
-If **Admin Login** does nothing and the page remains on **Loading shared updates...**, the JavaScript module did not load. Confirm that you are using the deployed `https://...netlify.app` URL and that the entire project was deployed—not only `index.html`.
-
-A single lead can use this format:
+One lead:
 
 ```json
 {
@@ -109,35 +101,38 @@ A single lead can use this format:
 }
 ```
 
-Upload multiple leads as an array of objects. `name` and `mobile` are required. `city` is optional and is derived safely from the address when omitted. `sno` is optional; the server assigns the next unused serial number when it is omitted. Status, follow-up, and remarks receive safe defaults when omitted.
+For several leads, upload an array of these objects. `name` and `mobile` are required. `city` is derived from the address when omitted. `sno` is optional; the next free serial number is assigned automatically. Status must be one of *Not Called, Called, No Answer, Follow-up, Interested, Not Interested*. Up to 1,000 leads / 2 MB per import; split bigger files.
 
-The importer also accepts the display labels `S.No.`, `Institute/Business Name`, `Mobile Number`, `Area/Address`, `City`, `Category`, `Call Status`, `Next Follow-up`, and `Remarks`. These map to the lowercase fields shown above. Keep mobile numbers in quotation marks so leading zeroes are preserved. If a row contains both versions of one field, their values must match.
+The importer also accepts the display labels `S.No.`, `Institute/Business Name`, `Mobile Number`, `Area/Address`, `City`, `Category`, `Call Status`, `Next Follow-up` and `Remarks`. This is exactly the format of a folder **Download**. Keep mobile numbers in quotes so leading zeroes are preserved.
 
-## Backup and password changes
+## Moving your data from the old Netlify site
 
-After admin login, select **Download JSON Backup** to save the complete collection. To save only one folder in an import-ready format, open **Manage Compartments** and use that compartment's **Download** action.
+The new deployment starts with the original 722 leads in **Existing Leads**. To bring over work done on Netlify (statuses, remarks, imported folders):
 
-- Changing `LEAD_ADMIN_PASSWORD` changes the password used for future logins. Existing 24-hour admin sessions remain active until logout or expiry.
-- Rotating `LEAD_SESSION_SECRET` immediately invalidates every existing admin session. Use this when the password may have been shared unintentionally.
+1. Before deploying, set `SEED_INITIAL_LEADS=false` in Vercel if you plan to import *Existing Leads* from Netlify. This avoids duplicate sample leads.
+2. On the **old Netlify site**, log in as admin, open **Manage Compartments**, and press **Download** for each compartment.
+3. On the **new Vercel site**, log in, create a folder with the same name, open **Import Leads**, choose that folder and upload the downloaded file. Status, remarks, and follow-up come across with each lead.
 
-Redeploy after changing environment variables if Netlify does not automatically rebuild the site.
+Also keep a full **Download JSON Backup** from Netlify as an archive before shutting the old site down.
 
-## Verify shared persistence
+## Local development
 
-1. Open the deployed site in one browser.
-2. Wait for **Shared lead data loaded**.
-3. Change a lead's status, remarks, or follow-up and select **Update**.
-4. Wait for the saved confirmation.
-5. Refresh the page and confirm the values remain.
-6. Open the site on another browser or phone and confirm it shows the same values.
+Requires Node.js 22.
 
-If an update fails, the typed values remain visible and the card reports that the update should be retried. The interface never reports a change as saved before Netlify confirms it.
+```bash
+npm install
+npm test          # runs the full test suite
+npm run dev       # http://localhost:3000
+```
 
-## Operational notes
+Without `MONGODB_URI`, `npm run dev` stores data in `.data/local-store.json` and uses the admin password `admin` unless you set `LEAD_ADMIN_PASSWORD`. To develop against Atlas, copy `.env.example` to `.env` and fill in the values. `.env` is git-ignored.
 
-- The WhatsApp message template remains a browser-local preference.
-- Public workflow updates are intentional; do not use this site for lead data that should be private from anyone holding the link.
-- Each lead is a separate Blob record, so changes to different leads do not overwrite each other.
-- Compartment names are stored separately, and each lead stores its current compartment ID and City.
-- If two users change the same field at nearly the same time, the last successful write wins.
-- Monitor usage in Netlify's billing dashboard. Two users and a few similar low-traffic projects should be modest, but a public URL can still be abused.
+Opening `public/index.html` directly from disk will not work. Browsers block its JavaScript modules there, and there is no API behind it.
+
+## Free-tier notes
+
+- **MongoDB Atlas M0:** free forever with 512 MB of storage and shared CPU. Atlas may pause a free cluster after a long period with no connections (it emails you first). Resuming it from the Atlas dashboard keeps all data.
+- **Vercel Hobby:** free for personal, non-commercial projects, with generous limits for a small team's lead list. For commercial use, Vercel's terms require the Pro plan.
+- Every lead is its own JSON document, so changes to different leads never overwrite each other. If two people edit the same field at the same moment, the last save wins.
+- Status, remarks, and follow-up are public to anyone with the link by design. Don't use this site for data that must be private from link holders.
+- The admin login is rate-limited (5 attempts per 15 minutes per IP per server instance). Choose a strong password.

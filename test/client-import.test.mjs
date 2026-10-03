@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createImportReviewState, createLatestReadGuard, parseImportText, readJsonFile } from "../client-import.mjs";
-import * as importTools from "../client-import.mjs";
+import { createImportReviewState, createLatestReadGuard, parseImportText, readJsonFile } from "../public/client-import.mjs";
+import * as importTools from "../public/client-import.mjs";
 
 test("parseImportText accepts one object or a non-empty array", () => {
   assert.deepEqual(parseImportText(' { "name": "A" } ').records, [{ name: "A" }]);

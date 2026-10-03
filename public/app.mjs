@@ -25,7 +25,10 @@ const els = Object.fromEntries([
   "manageCompartments", "compartmentDialog", "newCompartmentName", "createCompartment", "compartmentRows",
   "deleteCompartmentDialog", "deleteCompartmentLabel", "deleteCompartmentCount", "deleteCompartmentName",
   "downloadBeforeCompartmentDelete", "confirmCompartmentDelete",
-  "bulkMoveBar", "selectedCount", "moveDestination", "moveSelected", "clearSelection"
+  "bulkMoveBar", "selectedCount", "moveDestination", "moveSelected", "clearSelection",
+  "folderIcon", "folderCrumb", "folderTitle", "folderActions", "folderImport", "folderDownload", "folderRename",
+  "folderDelete", "statusStats", "filterCount", "newFolderQuick", "renameDialog", "renameForm", "renameInput",
+  "dropZone", "dropZoneText"
 ].map(id => [id, document.getElementById(id)]));
 
 let renderLimit = PAGE_SIZE;
@@ -38,6 +41,28 @@ let activeEditId = "";
 let activeDeleteId = "";
 let activeDeleteCompartmentId = "";
 let adminEnabled = false;
+let activeRenameId = "";
+
+const STATUS_CLASS = {
+  "Not Called": "st-not-called", "Called": "st-called", "No Answer": "st-no-answer",
+  "Follow-up": "st-follow-up", "Interested": "st-interested", "Not Interested": "st-not-interested"
+};
+const STATUS_COLOR = {
+  "Not Called": "#98a2b3", "Called": "#1769e0", "No Answer": "#b54708",
+  "Follow-up": "#6941c6", "Interested": "#179c52", "Not Interested": "#b42318"
+};
+const ICONS = {
+  folder: (size = 20) => `<svg width="${size}" height="${size}" viewBox="0 0 24 24" aria-hidden="true"><path fill="#d99a1e" d="M3 6.5A2.5 2.5 0 0 1 5.5 4h4.1l2 2.2h6.9A2.5 2.5 0 0 1 21 8.7v8.8a2.5 2.5 0 0 1-2.5 2.5h-13A2.5 2.5 0 0 1 3 17.5z"/><path fill="#f5b83d" d="M3 9.2A2.2 2.2 0 0 1 5.2 7h13.6A2.2 2.2 0 0 1 21 9.2v8.3a2.5 2.5 0 0 1-2.5 2.5h-13A2.5 2.5 0 0 1 3 17.5z"/></svg>`,
+  folderOpen: (size = 20) => `<svg width="${size}" height="${size}" viewBox="0 0 24 24" aria-hidden="true"><path fill="#d99a1e" d="M3 6.5A2.5 2.5 0 0 1 5.5 4h4.1l2 2.2h6.9A2.5 2.5 0 0 1 21 8.7V10H3z"/><path fill="#f5b83d" d="M2.2 11.4A1.6 1.6 0 0 1 3.8 9.5h16.9a1.6 1.6 0 0 1 1.6 1.9l-1.2 6.6a2.5 2.5 0 0 1-2.5 2H5.4a2.5 2.5 0 0 1-2.5-2z"/></svg>`,
+  stack: (size = 20) => `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="#1769e0" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l9 5-9 5-9-5z"/><path d="M3 13l9 5 9-5"/></svg>`,
+  pin: `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 22s7-6.2 7-12a7 7 0 0 0-14 0c0 5.8 7 12 7 12z"/><circle cx="12" cy="10" r="2.5"/></svg>`,
+  city: `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 21h18M5 21V7l6-4v18M19 21V11l-8-4"/></svg>`,
+  tag: `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20.6 13.4l-7.2 7.2a2 2 0 0 1-2.8 0L3 13V3h10l7.6 7.6a2 2 0 0 1 0 2.8z"/><circle cx="7.5" cy="7.5" r="1.5"/></svg>`,
+  phone: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3.1 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.1 4.2 2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7c.1 1 .4 1.9.7 2.8a2 2 0 0 1-.5 2.1L8.1 9.9a16 16 0 0 0 6 6l1.3-1.3a2 2 0 0 1 2.1-.4c.9.3 1.8.6 2.8.7a2 2 0 0 1 1.7 2z"/></svg>`,
+  whatsapp: `<svg width="17" height="17" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2a10 10 0 0 0-8.6 15.1L2 22l5-1.3A10 10 0 1 0 12 2zm0 18.2a8.2 8.2 0 0 1-4.2-1.2l-.3-.2-3 .8.8-2.9-.2-.3A8.2 8.2 0 1 1 12 20.2zm4.5-6.1c-.2-.1-1.5-.7-1.7-.8s-.4-.1-.6.1-.7.8-.8 1-.3.2-.5.1a6.7 6.7 0 0 1-3.3-2.9c-.3-.4.3-.4.7-1.3.1-.2 0-.3 0-.4l-.8-1.8c-.2-.5-.4-.4-.6-.4h-.5a1 1 0 0 0-.7.3 3 3 0 0 0-.9 2.2 5.2 5.2 0 0 0 1.1 2.7 11.8 11.8 0 0 0 4.5 4c1.7.7 2.3.8 3.2.6a2.7 2.7 0 0 0 1.8-1.3 2.2 2.2 0 0 0 .1-1.3c0-.1-.2-.2-.4-.3z"/></svg>`,
+  edit: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>`,
+  trash: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6"/></svg>`
+};
 
 function esc(value) {
   return String(value ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;")
@@ -88,20 +113,28 @@ function statusOptions(selected) {
 }
 
 function compartmentName(id) {
-  return compartments.find(item => item.id === id)?.name || "Unavailable compartment";
+  return compartments.find(item => item.id === id)?.name || "Unavailable folder";
 }
 
 function renderCompartmentOptions(select, selected = "", includePlaceholder = false) {
   const options = compartments.map(item => `<option value="${esc(item.id)}"${item.id === selected ? " selected" : ""}>${esc(item.name)} (${item.count ?? 0})</option>`);
-  select.innerHTML = `${includePlaceholder ? '<option value="">Choose a compartment</option>' : ""}${options.join("")}`;
+  select.innerHTML = `${includePlaceholder ? '<option value="">Choose a folder</option>' : ""}${options.join("")}`;
+}
+
+function folderButton(id, name, count, icon) {
+  const active = activeCompartmentId === id;
+  return `<button class="folder-item compartment-tab${active ? " active" : ""}" type="button" data-compartment="${esc(id)}"${active ? ' aria-current="true"' : ""} title="${esc(name)}">
+    ${icon}<span class="folder-name">${esc(name)}</span><span class="folder-count">${count}</span>
+  </button>`;
 }
 
 function renderCompartmentNav() {
   const facets = buildLeadFacets(state.allLeads(), compartments);
   compartments = facets.compartments;
   els.compartmentNav.innerHTML = [
-    `<button class="compartment-tab${activeCompartmentId ? "" : " active"}" type="button" data-compartment="">All Leads (${state.allLeads().length})</button>`,
-    ...compartments.map(item => `<button class="compartment-tab${activeCompartmentId === item.id ? " active" : ""}" type="button" data-compartment="${esc(item.id)}">${esc(item.name)} (${item.count})</button>`)
+    folderButton("", "All Leads", state.allLeads().length, ICONS.stack(19)),
+    '<div class="folder-divider" role="presentation"></div>',
+    ...compartments.map(item => folderButton(item.id, item.name, item.count, activeCompartmentId === item.id ? ICONS.folderOpen() : ICONS.folder()))
   ].join("");
   renderCompartmentOptions(els.moveDestination, els.moveDestination.value);
   renderCompartmentOptions(els.importCompartment, els.importCompartment.value || activeCompartmentId, true);
@@ -118,11 +151,35 @@ function renderFilters() {
   const facets = buildLeadFacets(state.allLeads(), compartments);
   renderFacetGroup(els.cityFilters, facets.cities, selectedCities, "city");
   renderFacetGroup(els.categoryFilters, facets.categories, selectedCategories, "category");
-  const chips = [];
-  if (activeCompartmentId) chips.push(`Compartment: ${compartmentName(activeCompartmentId)}`);
-  for (const city of selectedCities) chips.push(`City: ${city}`);
-  for (const category of selectedCategories) chips.push(`Category: ${category}`);
-  els.activeFilters.innerHTML = chips.map(value => `<span class="filter-chip">${esc(value)}</span>`).join("");
+  const chips = [
+    ...[...selectedCities].map(value => ({ facet: "city", value, label: `City: ${value}` })),
+    ...[...selectedCategories].map(value => ({ facet: "category", value, label: `Category: ${value}` }))
+  ];
+  els.activeFilters.innerHTML = chips.map(chip => `<button class="filter-chip" type="button" data-remove-facet="${chip.facet}" data-value="${esc(chip.value)}" aria-label="Remove filter ${esc(chip.label)}">${esc(chip.label)} ✕</button>`).join("");
+  els.filterCount.textContent = String(chips.length);
+  els.filterCount.hidden = chips.length === 0;
+}
+
+function renderFolderHero() {
+  const compartment = compartments.find(item => item.id === activeCompartmentId);
+  els.folderIcon.className = `hero-icon${compartment ? "" : " all"}`;
+  els.folderIcon.innerHTML = compartment ? ICONS.folderOpen(30) : ICONS.stack(28);
+  els.folderCrumb.textContent = compartment ? `Folder · ${compartment.count ?? 0} lead${compartment.count === 1 ? "" : "s"}` : `All folders · ${state.allLeads().length} leads`;
+  els.folderTitle.textContent = compartment ? compartment.name : "All Leads";
+  els.folderActions.hidden = !adminEnabled || !compartment;
+}
+
+function renderStats() {
+  const scoped = state.allLeads()
+    .map(lead => state.valuesFor(lead.id))
+    .filter(lead => !activeCompartmentId || lead.compartmentId === activeCompartmentId);
+  const counts = new Map(STATUS_OPTIONS.map(status => [status, 0]));
+  for (const lead of scoped) counts.set(lead.status, (counts.get(lead.status) || 0) + 1);
+  const current = els.statusFilter.value;
+  els.statusStats.innerHTML = [
+    `<button class="stat${current ? "" : " active"}" type="button" data-status=""><span class="dot" style="background:#0b2f59"></span>All <strong>${scoped.length}</strong></button>`,
+    ...STATUS_OPTIONS.map(status => `<button class="stat${current === status ? " active" : ""}" type="button" data-status="${esc(status)}"><span class="dot" style="background:${STATUS_COLOR[status]}"></span>${esc(status)} <strong>${counts.get(status)}</strong></button>`)
+  ].join("");
 }
 
 function cardHtml(baseLead) {
@@ -133,33 +190,39 @@ function cardHtml(baseLead) {
   const selectionControl = canSelectLeadForMove(activeCompartmentId, lead)
     ? `<label class="card-select admin-only"><input class="lead-select" type="checkbox"${selected ? " checked" : ""}> Select lead</label>`
     : "";
-  return `<article class="card" data-id="${esc(lead.id)}">
+  const confirmedStatus = state.confirmedFor(lead.id)?.status || lead.status;
+  return `<article class="card${selected ? " selected" : ""}" data-id="${esc(lead.id)}">
     <div class="card-head">
       ${selectionControl}
-      <div class="sno">LEAD #${esc(lead.sno)}</div>
+      <div class="card-top">
+        <span class="sno">LEAD #${esc(lead.sno)}</span>
+        <span class="status-pill ${STATUS_CLASS[confirmedStatus] || ""}">${esc(confirmedStatus)}</span>
+      </div>
       <h2 class="biz">${esc(lead.name)}</h2>
-      <a class="phone" href="tel:${esc(number.tel)}">${esc(lead.mobile)}</a>
+      <a class="phone" href="tel:${esc(number.tel)}">${ICONS.phone}${esc(lead.mobile)}</a>
     </div>
     <div class="card-body">
       <div class="meta">
-        <div class="meta-row"><div class="label">Compartment</div><div class="value"><span class="compartment-badge">${esc(compartmentName(lead.compartmentId))}</span></div></div>
-        <div class="meta-row"><div class="label">City / Area</div><div class="value">${esc(lead.city || "Unknown")}</div></div>
-        <div class="meta-row"><div class="label">Area/Address</div><div class="value">${esc(lead.address || "—")}</div></div>
-        <div class="meta-row"><div class="label">Category</div><div class="value">${esc(lead.category || "—")}</div></div>
+        <div class="meta-row" title="Folder">${ICONS.folder(16)}<div class="value"><span class="compartment-badge">${esc(compartmentName(lead.compartmentId))}</span></div></div>
+        <div class="meta-row" title="City / Area">${ICONS.city}<div class="value">${esc(lead.city || "Unknown")}</div></div>
+        <div class="meta-row" title="Area/Address">${ICONS.pin}<div class="value">${lead.address ? esc(lead.address) : '<span class="muted">No address</span>'}</div></div>
+        <div class="meta-row" title="Category">${ICONS.tag}<div class="value">${lead.category ? esc(lead.category) : '<span class="muted">No category</span>'}</div></div>
       </div>
       <div class="actions">
-        <a class="action call" href="tel:${esc(number.tel)}">☎ Call</a>
-        <a class="action wa" href="https://wa.me/${esc(number.wa)}?text=${message}" target="_blank" rel="noopener">WhatsApp</a>
+        <a class="action call" href="tel:${esc(number.tel)}">${ICONS.phone} Call</a>
+        <a class="action wa" href="https://wa.me/${esc(number.wa)}?text=${message}" target="_blank" rel="noopener">${ICONS.whatsapp} WhatsApp</a>
       </div>
       <div class="work-grid">
         <div class="field"><label>Call status</label><select class="status-input">${statusOptions(lead.status)}</select></div>
         <div class="field"><label>Follow-up</label><input class="followup-input" type="datetime-local" value="${esc(lead.followup)}"></div>
         <div class="field remarks-field"><label>Remarks</label><textarea class="remarks-input" maxlength="5000" placeholder="Add notes…">${esc(lead.remarks)}</textarea></div>
       </div>
-      <button class="update-btn" type="button">Update</button>
-      <div class="admin-actions admin-only">
-        <button class="admin-only edit-lead" type="button">Edit Lead</button>
-        <button class="admin-only delete-lead" type="button">Delete Lead</button>
+      <div class="card-foot">
+        <button class="update-btn" type="button">Update</button>
+        <div class="admin-actions admin-only">
+          <button class="admin-only edit-lead" type="button">${ICONS.edit} Edit Lead</button>
+          <button class="admin-only delete-lead" type="button">${ICONS.trash} Delete Lead</button>
+        </div>
       </div>
     </div>
   </article>`;
@@ -181,6 +244,8 @@ function restoreRenderedFocus(focusTarget) {
   } else if (focusTarget.kind === "lead-selection") {
     const card = [...els.leadList.querySelectorAll(".card")].find(item => item.dataset.id === focusTarget.id);
     target = card?.querySelector(".lead-select");
+  } else if (focusTarget.kind === "status") {
+    target = [...els.statusStats.querySelectorAll("[data-status]")].find(button => button.dataset.status === focusTarget.status);
   } else if (focusTarget.kind === "compartment") {
     target = [...els.compartmentNav.querySelectorAll("[data-compartment]")].find(button =>
       button.dataset.compartment === focusTarget.id
@@ -191,6 +256,8 @@ function restoreRenderedFocus(focusTarget) {
 
 function render(focusTarget = null) {
   renderCompartmentNav();
+  renderFolderHero();
+  renderStats();
   renderFilters();
   const visible = filtered.slice(0, renderLimit);
   els.topCount.textContent = `${state.allLeads().length} leads`;
@@ -198,7 +265,7 @@ function render(focusTarget = null) {
   els.loadMore.hidden = visible.length >= filtered.length;
   renderBulkBar();
   if (!visible.length) {
-    els.leadList.innerHTML = '<div class="empty">No leads match the current filters.</div>';
+    els.leadList.innerHTML = `<div class="empty">${ICONS.folder(40)}<strong>No leads here</strong>${state.allLeads().length ? "No leads match the current folder and filters." : "Import leads to get started."}</div>`;
     restoreRenderedFocus(focusTarget);
     return;
   }
@@ -307,6 +374,7 @@ function openImport() {
   els.jsonText.value = "";
   els.jsonFile.value = "";
   els.importNewCompartment.value = "";
+  els.dropZoneText.innerHTML = "<b>Upload a JSON file</b> — click or drag it here";
   renderCompartmentOptions(els.importCompartment, activeCompartmentId, true);
   els.importPreview.textContent = "Choose a destination, paste JSON or choose a file, then preview it.";
   els.confirmImport.disabled = true;
@@ -315,6 +383,7 @@ function openImport() {
 
 function renderCompartmentRows() {
   els.compartmentRows.innerHTML = compartments.map(item => `<div class="compartment-row" data-id="${esc(item.id)}">
+    ${ICONS.folder(24)}
     <input class="compartment-name-input" value="${esc(item.name)}" maxlength="80" aria-label="Compartment name">
     <button class="mini-btn rename-compartment" type="button">Rename</button>
     <button class="mini-btn export-compartment" type="button">Download (${item.count ?? 0})</button>
@@ -324,12 +393,12 @@ function renderCompartmentRows() {
 
 async function createCompartmentFrom(value, onCreated) {
   const name = value.trim();
-  if (!name) return toast("Enter a compartment name");
+  if (!name) return toast("Enter a folder name");
   try {
     const created = await api.createCompartment(name);
     await refreshCompartments();
     onCreated?.(created);
-    toast("Compartment created");
+    toast("Folder created");
   } catch (error) { adminFailure(error, "Could not create compartment"); }
 }
 
@@ -367,7 +436,20 @@ els.compartmentNav.addEventListener("click", event => {
   const button = event.target.closest("[data-compartment]");
   if (!button) return;
   activeCompartmentId = button.dataset.compartment;
+  if (window.matchMedia("(max-width:900px)").matches) els.folderTitle.scrollIntoView({ block: "nearest" });
   applyFilters({ clearSelection: true, focusTarget: { kind: "compartment", id: activeCompartmentId } });
+});
+els.statusStats.addEventListener("click", event => {
+  const button = event.target.closest("[data-status]");
+  if (!button) return;
+  els.statusFilter.value = button.dataset.status;
+  applyFilters({ clearSelection: true, focusTarget: { kind: "status", status: button.dataset.status } });
+});
+els.activeFilters.addEventListener("click", event => {
+  const chip = event.target.closest("[data-remove-facet]");
+  if (!chip) return;
+  (chip.dataset.removeFacet === "city" ? selectedCities : selectedCategories).delete(chip.dataset.value);
+  applyFilters({ clearSelection: true });
 });
 els.filterToggle.addEventListener("click", () => {
   const open = els.filterPanel.classList.toggle("open");
@@ -400,18 +482,36 @@ els.jsonText.addEventListener("input", () => {
   fileReadGuard.invalidate();
   els.confirmImport.disabled = true;
 });
-els.jsonFile.addEventListener("change", async () => {
+async function loadImportFile(file) {
+  if (!file) return;
   importReview.invalidate();
   els.confirmImport.disabled = true;
   const token = fileReadGuard.begin();
   try {
-    const text = await readJsonFile(els.jsonFile.files[0], { maxBytes: 2_000_000 });
-    if (fileReadGuard.isCurrent(token)) els.jsonText.value = text;
+    const text = await readJsonFile(file, { maxBytes: 2_000_000 });
+    if (fileReadGuard.isCurrent(token)) {
+      els.jsonText.value = text;
+      els.dropZoneText.innerHTML = `<b>${esc(file.name)}</b> loaded — select Preview JSON`;
+    }
   } catch (error) { if (fileReadGuard.isCurrent(token)) toast(error.message); }
+}
+els.jsonFile.addEventListener("change", () => loadImportFile(els.jsonFile.files[0]));
+for (const type of ["dragenter", "dragover"]) {
+  els.dropZone.addEventListener(type, event => {
+    event.preventDefault();
+    els.dropZone.classList.add("dragging");
+  });
+}
+for (const type of ["dragleave", "drop"]) {
+  els.dropZone.addEventListener(type, () => els.dropZone.classList.remove("dragging"));
+}
+els.dropZone.addEventListener("drop", event => {
+  event.preventDefault();
+  loadImportFile(event.dataTransfer?.files?.[0]);
 });
 els.previewImport.addEventListener("click", async () => {
   const compartmentId = els.importCompartment.value;
-  if (!compartmentId) return toast("Choose a destination compartment");
+  if (!compartmentId) return toast("Choose a destination folder");
   const parsed = parseImportText(els.jsonText.value);
   if (!parsed.ok) {
     importReview.invalidate();
@@ -457,11 +557,7 @@ els.confirmImport.addEventListener("click", async () => {
   }
 });
 
-els.manageCompartments.addEventListener("click", () => {
-  renderCompartmentRows();
-  els.newCompartmentName.value = "";
-  els.compartmentDialog.showModal();
-});
+els.manageCompartments.addEventListener("click", openManageFolders);
 els.createCompartment.addEventListener("click", () => createCompartmentFrom(els.newCompartmentName.value, () => {
   els.newCompartmentName.value = "";
   renderCompartmentRows();
@@ -475,19 +571,53 @@ els.compartmentRows.addEventListener("click", async event => {
       await api.renameCompartment(id, row.querySelector(".compartment-name-input").value);
       await refreshCompartments();
       renderCompartmentRows();
-      toast("Compartment renamed");
+      toast("Folder renamed");
     } catch (error) { adminFailure(error, "Rename failed"); }
   } else if (event.target.classList.contains("export-compartment")) {
     await downloadCompartment(id);
   } else if (event.target.classList.contains("delete-compartment")) {
-    activeDeleteCompartmentId = id;
-    const compartment = compartments.find(item => item.id === id);
-    els.deleteCompartmentLabel.textContent = compartment.name;
-    els.deleteCompartmentCount.textContent = `${compartment.count ?? 0} lead${compartment.count === 1 ? "" : "s"}`;
-    els.deleteCompartmentName.value = "";
-    els.deleteCompartmentDialog.showModal();
+    openCompartmentDelete(id);
   }
 });
+
+function openCompartmentDelete(id) {
+  const compartment = compartments.find(item => item.id === id);
+  if (!compartment) return;
+  activeDeleteCompartmentId = id;
+  els.deleteCompartmentLabel.textContent = compartment.name;
+  els.deleteCompartmentCount.textContent = `${compartment.count ?? 0} lead${compartment.count === 1 ? "" : "s"}`;
+  els.deleteCompartmentName.value = "";
+  els.deleteCompartmentDialog.showModal();
+}
+
+function openManageFolders() {
+  renderCompartmentRows();
+  els.newCompartmentName.value = "";
+  els.compartmentDialog.showModal();
+  els.newCompartmentName.focus();
+}
+
+els.folderImport.addEventListener("click", openImport);
+els.folderDownload.addEventListener("click", () => { if (activeCompartmentId) downloadCompartment(activeCompartmentId); });
+els.folderDelete.addEventListener("click", () => openCompartmentDelete(activeCompartmentId));
+els.folderRename.addEventListener("click", () => {
+  const compartment = compartments.find(item => item.id === activeCompartmentId);
+  if (!compartment) return;
+  activeRenameId = compartment.id;
+  els.renameInput.value = compartment.name;
+  els.renameDialog.showModal();
+  els.renameInput.select();
+});
+els.renameForm.addEventListener("submit", async event => {
+  event.preventDefault();
+  try {
+    await api.renameCompartment(activeRenameId, els.renameInput.value);
+    await refreshCompartments();
+    els.renameDialog.close();
+    toast("Folder renamed");
+  } catch (error) { adminFailure(error, "Rename failed"); }
+});
+els.newFolderQuick.addEventListener("click", openManageFolders);
 els.downloadBeforeCompartmentDelete.addEventListener("click", () => {
   if (activeDeleteCompartmentId) downloadCompartment(activeDeleteCompartmentId);
 });
@@ -501,7 +631,7 @@ els.confirmCompartmentDelete.addEventListener("click", async () => {
     els.deleteCompartmentDialog.close();
     els.compartmentDialog.close();
     await loadAll();
-    toast("Compartment and its leads deleted");
+    toast("Folder and its leads deleted");
   } catch (error) { adminFailure(error, "Deletion failed; retry to continue"); }
   finally { els.confirmCompartmentDelete.disabled = false; }
 });
@@ -579,7 +709,6 @@ els.clearFilters.addEventListener("click", () => {
   els.search.value = "";
   els.statusFilter.value = "";
   els.areaSort.value = "";
-  activeCompartmentId = "";
   selectedCities = new Set();
   selectedCategories = new Set();
   applyFilters({ clearSelection: true });

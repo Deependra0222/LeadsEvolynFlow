@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { ApiError, createApiClient } from "../client-api.mjs";
+import { ApiError, createApiClient } from "../public/client-api.mjs";
 
 function jsonResponse(body, status = 200, headers = {}) {
   return Response.json(body, { status, headers });

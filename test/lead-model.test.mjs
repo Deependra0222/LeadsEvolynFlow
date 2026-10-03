@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 
 async function loadModel() {
-  return import("../netlify/lib/lead-model.mjs");
+  return import("../server/lib/lead-model.mjs");
 }
 
 test("lead contract exposes the exact statuses and limits", async () => {
@@ -235,7 +235,7 @@ test("stored leads normalize complete records", async () => {
 });
 
 test("seed JSON contains the 722 original leads", async () => {
-  const seed = JSON.parse(await readFile(new URL("../netlify/data/initial-leads.json", import.meta.url), "utf8"));
+  const seed = JSON.parse(await readFile(new URL("../server/data/initial-leads.json", import.meta.url), "utf8"));
   assert.equal(seed.length, 722);
   assert.deepEqual(seed.map(item => item.sno), Array.from({ length: 722 }, (_, i) => i + 1));
 });

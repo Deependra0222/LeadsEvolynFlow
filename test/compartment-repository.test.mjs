@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createCompartmentRepository } from "../netlify/lib/compartment-repository.mjs";
+import { createCompartmentRepository } from "../server/lib/compartment-repository.mjs";
 
 const NOW = "2026-09-25T00:00:00.000Z";
 

@@ -1,15 +1,16 @@
 {
-  "name": "telecaller-netlify",
+  "name": "leads-evolyn-flow",
   "private": true,
   "type": "module",
   "engines": {
-    "node": "20.x || 22.x"
+    "node": "22.x"
   },
   "scripts": {
-    "test": "node --test",
-    "extract:seed": "node scripts/extract-initial-leads.mjs"
+    "dev": "node scripts/dev-server.mjs",
+    "test": "node --test"
   },
   "dependencies": {
-    "@netlify/blobs": "11.1.0"
+    "@vercel/functions": "^3.9.11",
+    "mongodb": "^7.7.0"
   }
 }

@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createLeadRepository } from "../netlify/lib/lead-repository.mjs";
-import { createCompartmentRepository } from "../netlify/lib/compartment-repository.mjs";
+import { createLeadRepository } from "../server/lib/lead-repository.mjs";
+import { createCompartmentRepository } from "../server/lib/compartment-repository.mjs";
 
 const NOW = "2026-09-24T05:00:00.000Z";
 const baseLead = (overrides = {}) => ({

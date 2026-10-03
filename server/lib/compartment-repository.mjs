@@ -37,6 +37,11 @@ export function createCompartmentRepository({
   }
 
   async function list() {
+    if (typeof store.listJSON === "function") {
+      const entries = await store.listJSON(COMPARTMENT_PREFIX);
+      return entries.map(entry => normalizeStoredCompartment(entry.data)).filter(Boolean)
+        .sort((left, right) => left.name.localeCompare(right.name, "en-IN", { sensitivity: "base" }));
+    }
     const keys = [];
     for await (const page of store.list({ prefix: COMPARTMENT_PREFIX, paginate: true })) {
       for (const blob of page.blobs) keys.push(blob.key);
