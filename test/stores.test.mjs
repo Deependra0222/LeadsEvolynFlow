@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createMongoStore } from "../server/lib/mongo-store.mjs";
 import { createFileStore } from "../server/lib/file-store.mjs";
-import { createServerHandler, resolveSessionSecret } from "../server/app.mjs";
+import { createServerHandler, resolveMongoUri, resolveSessionSecret } from "../server/app.mjs";
 
 // Mirrors the subset of the MongoDB driver's Collection API that the store uses,
 // including the duplicate-key error code and left-anchored _id regex filters.
@@ -121,6 +121,16 @@ test("session secret is optional and derived from the admin password", () => {
   const derived = resolveSessionSecret({ LEAD_ADMIN_PASSWORD: "pw", MONGODB_URI: "mongodb+srv://x" });
   assert.ok(derived.length >= 32);
   assert.notEqual(derived, resolveSessionSecret({ LEAD_ADMIN_PASSWORD: "other", MONGODB_URI: "mongodb+srv://x" }));
+});
+
+test("MongoDB URI is read from MONGODB_URI or a Vercel integration prefix", () => {
+  assert.equal(resolveMongoUri({ MONGODB_URI: "mongodb://a", STORAGE_MONGODB_URI: "mongodb://b" }), "mongodb://a");
+  assert.equal(resolveMongoUri({ STORAGE_MONGODB_URI: "mongodb://b" }), "mongodb://b");
+  assert.equal(resolveMongoUri({ OTHER: "x" }), "");
+  assert.equal(
+    resolveSessionSecret({ LEAD_ADMIN_PASSWORD: "pw", STORAGE_MONGODB_URI: "mongodb://b" }),
+    resolveSessionSecret({ LEAD_ADMIN_PASSWORD: "pw", MONGODB_URI: "mongodb://b" })
+  );
 });
 
 test("Vercel deployment without MONGODB_URI fails loudly instead of losing data", async () => {
